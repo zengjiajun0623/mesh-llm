@@ -133,6 +133,12 @@ struct Cli {
     /// Nostr relay URLs for publishing/discovery (default: damus, nos.lol, nostr.band).
     #[arg(long)]
     nostr_relay: Vec<String>,
+
+    /// Run fully offline — no network, no relay, no STUN, no Nostr.
+    /// Serves all local models via llama-server's router mode (multi-model, on-demand loading).
+    /// If --model is specified, only that model is served. Otherwise all on-disk models are available.
+    #[arg(long)]
+    offline: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -195,10 +201,12 @@ async fn main() -> Result<()> {
         launch::kill_orphan_rpc_servers().await;
     }
 
-    // Background version check (non-blocking)
-    tokio::spawn(async {
-        check_for_update().await;
-    });
+    // Background version check (non-blocking, skip when offline)
+    if !cli.offline {
+        tokio::spawn(async {
+            check_for_update().await;
+        });
+    }
 
     // Subcommand dispatch
     if let Some(cmd) = &cli.command {
@@ -233,6 +241,15 @@ async fn main() -> Result<()> {
                 return nostr::rotate_keys().map_err(Into::into);
             }
         }
+    }
+
+    // --- Offline mode ---
+    if cli.offline {
+        let bin_dir = match &cli.bin_dir {
+            Some(d) => d.clone(),
+            None => detect_bin_dir()?,
+        };
+        return run_offline(cli, bin_dir).await;
     }
 
     // Auto-enable publishing when mesh is named
@@ -1052,6 +1069,178 @@ async fn run_auto(mut cli: Cli, resolved_models: Vec<PathBuf>, requested_model_n
 
     launch::kill_llama_server().await;
     launch::kill_orphan_rpc_servers().await;
+    Ok(())
+}
+
+/// Offline mode: no network, serves all local models via llama-server's router mode.
+/// Multi-model on-demand loading — agents request by model name, llama-server swaps as needed.
+async fn run_offline(cli: Cli, bin_dir: PathBuf) -> Result<()> {
+    let my_vram_gb = mesh::detect_vram_bytes_capped(cli.max_vram) as f64 / 1e9;
+    let _local_models = mesh::scan_local_models();
+    let ollama_models = mesh::scan_ollama_models();
+
+    eprintln!("✈️  mesh-llm v{VERSION} — offline mode");
+    eprintln!("   VRAM: {:.0}GB", my_vram_gb);
+    eprintln!();
+
+    // Collect all available models with paths
+    let models_dir = download::models_dir();
+
+    // List GGUF models from ~/.models
+    let mut gguf_models: Vec<(String, std::path::PathBuf, u64)> = Vec::new();
+    if models_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&models_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("gguf") {
+                    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                    if size > 500_000_000 {
+                        let stem = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+                        gguf_models.push((stem, path, size));
+                    }
+                }
+            }
+        }
+    }
+    gguf_models.sort_by_key(|(name, _, _)| name.clone());
+
+    // Collect ollama extras (only those not duplicating a ~/.models model)
+    let mut ollama_extras: Vec<(String, std::path::PathBuf)> = Vec::new();
+    for om in &ollama_models {
+        // Check if this is already covered by a GGUF in ~/.models
+        // (e.g. ollama/glm-4.7-flash ~= GLM-4.7-Flash-Q4_K_M.gguf)
+        let already_covered = gguf_models.iter().any(|(_, path, _)| {
+            // Compare file sizes as a rough dedup
+            let gguf_size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            let diff = (gguf_size as i64 - om.size as i64).unsigned_abs();
+            diff < 100_000_000 // within 100MB = probably same model
+        });
+        if !already_covered {
+            ollama_extras.push((om.name.clone(), om.path.clone()));
+        }
+    }
+
+    if gguf_models.is_empty() && ollama_extras.is_empty() {
+        eprintln!("   No models found on disk.");
+        eprintln!("   Download a model first: mesh-llm download 3b");
+        return Ok(());
+    }
+
+    eprintln!("   Models available:");
+    for (name, _, size) in &gguf_models {
+        eprintln!("     · {name} ({:.1}GB)", *size as f64 / 1e9);
+    }
+    for (name, path) in &ollama_extras {
+        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        eprintln!("     · {name} ({:.1}GB, ollama)", size as f64 / 1e9);
+    }
+    if !ollama_models.is_empty() && ollama_extras.is_empty() && !ollama_models.is_empty() {
+        eprintln!("   (ollama models already covered by local GGUFs)");
+    }
+    eprintln!();
+
+    let total_models = gguf_models.len() + ollama_extras.len();
+
+    // If --model was specified, use single-model mode instead of router
+    if !cli.model.is_empty() {
+        let model_path = resolve_model(&cli.model[0]).await?;
+        let model_name = model_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        eprintln!("   Serving: {model_name} (single model mode)");
+        let llama_port = launch::find_free_port().await?;
+        let model_bytes = std::fs::metadata(&model_path).map(|m| m.len()).unwrap_or(0);
+        launch::start_llama_server(
+            &bin_dir, &model_path, llama_port, &[], None, None, 0, model_bytes,
+        ).await?;
+        eprintln!();
+        eprintln!("  ✅ Ready");
+        eprintln!("     API: http://localhost:{}", cli.port);
+        eprintln!();
+        eprintln!("  curl http://localhost:{}/v1/chat/completions \\", cli.port);
+        eprintln!("    -d '{{\"model\":\"{model_name}\",\"messages\":[{{\"role\":\"user\",\"content\":\"hello\"}}]}}'");
+        eprintln!();
+        // Simple proxy from cli.port to llama_port
+        let addr = if cli.listen_all { "0.0.0.0" } else { "127.0.0.1" };
+        let listener = tokio::net::TcpListener::bind(format!("{addr}:{}", cli.port)).await?;
+        loop {
+            tokio::select! {
+                accept = listener.accept() => {
+                    let (tcp_stream, _) = accept?;
+                    let _ = tcp_stream.set_nodelay(true);
+                    let port = llama_port;
+                    tokio::spawn(async move {
+                        if let Ok(upstream) = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await {
+                            let _ = upstream.set_nodelay(true);
+                            let _ = tunnel::relay_tcp_streams(tcp_stream, upstream).await;
+                        }
+                    });
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    eprintln!("\nShutting down...");
+                    break;
+                }
+            }
+        }
+        launch::kill_llama_server().await;
+        return Ok(());
+    }
+
+    // Router mode: all models available, on-demand loading
+    eprintln!("   Starting llama-server (router mode, {} model(s), max loaded: 1)...", total_models);
+
+    let llama_port = launch::find_free_port().await?;
+    launch::start_llama_server_router(
+        &bin_dir, &models_dir, llama_port, 1, &ollama_extras,
+    ).await?;
+
+    // List the model names that are available via the router
+    let mut all_model_names: Vec<String> = gguf_models.iter().map(|(n, _, _)| n.clone()).collect();
+    for (name, _) in &ollama_extras {
+        let safe = name.replace('/', "-").replace(':', "-");
+        all_model_names.push(safe);
+    }
+
+    eprintln!();
+    eprintln!("  ✅ Ready (offline, {} models available)", total_models);
+    eprintln!("     API: http://localhost:{}", cli.port);
+    eprintln!("     Models load on first request, swap via LRU");
+    eprintln!();
+    eprintln!("  Available models:");
+    for name in &all_model_names {
+        eprintln!("     · {name}");
+    }
+    eprintln!();
+    if let Some(name) = all_model_names.first() {
+        eprintln!("  curl http://localhost:{}/v1/chat/completions \\", cli.port);
+        eprintln!("    -d '{{\"model\":\"{name}\",\"messages\":[{{\"role\":\"user\",\"content\":\"hello\"}}]}}'");
+        eprintln!();
+    }
+
+    // Proxy from cli.port → llama_port (router handles model routing internally)
+    let addr = if cli.listen_all { "0.0.0.0" } else { "127.0.0.1" };
+    let listener = tokio::net::TcpListener::bind(format!("{addr}:{}", cli.port)).await?;
+
+    loop {
+        tokio::select! {
+            accept = listener.accept() => {
+                let (tcp_stream, _) = accept?;
+                let _ = tcp_stream.set_nodelay(true);
+                let port = llama_port;
+                tokio::spawn(async move {
+                    if let Ok(upstream) = tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await {
+                        let _ = upstream.set_nodelay(true);
+                        let _ = tunnel::relay_tcp_streams(tcp_stream, upstream).await;
+                    }
+                });
+            }
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("\nShutting down...");
+                break;
+            }
+        }
+    }
+
+    launch::kill_llama_server().await;
+    let _ = std::fs::remove_dir_all(std::env::temp_dir().join("mesh-llm-offline-models"));
     Ok(())
 }
 

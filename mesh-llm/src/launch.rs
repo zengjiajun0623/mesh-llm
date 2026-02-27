@@ -244,8 +244,101 @@ pub async fn start_llama_server(
     anyhow::bail!("llama-server failed to become healthy within 600s");
 }
 
+/// Start llama-server in router mode with --models-dir for multi-model on-demand serving.
+/// Used by offline mode. No --rpc, no tensor split — solo GPU only.
+pub async fn start_llama_server_router(
+    bin_dir: &Path,
+    models_dir: &Path,
+    http_port: u16,
+    models_max: u16,
+    extra_model_paths: &[(String, std::path::PathBuf)],
+) -> Result<()> {
+    let llama_server = bin_dir.join("llama-server");
+    anyhow::ensure!(
+        llama_server.exists(),
+        "llama-server not found at {}. Build llama.cpp first.",
+        llama_server.display()
+    );
+
+    tracing::info!(
+        "Starting llama-server (router mode) on :{http_port} with models-dir {}",
+        models_dir.display()
+    );
+
+    // Create symlinks for ollama models in a temp dir alongside models_dir models.
+    // We use a staging dir that contains symlinks to everything: models_dir GGUFs + ollama blobs.
+    let staging_dir = std::env::temp_dir().join("mesh-llm-offline-models");
+    let _ = std::fs::remove_dir_all(&staging_dir);
+    std::fs::create_dir_all(&staging_dir)
+        .context("Failed to create offline model staging dir")?;
+
+    // Symlink all .gguf files from models_dir (skip partials and drafts)
+    if models_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(models_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("gguf") {
+                    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                    if size > 500_000_000 {
+                        let link = staging_dir.join(entry.file_name());
+                        let _ = std::os::unix::fs::symlink(&path, &link);
+                    }
+                }
+            }
+        }
+    }
+
+    // Symlink ollama models with friendly .gguf names
+    for (name, blob_path) in extra_model_paths {
+        // Turn "ollama/glm-4.7-flash" into "ollama-glm-4.7-flash.gguf"
+        let safe_name = name.replace('/', "-").replace(':', "-");
+        let link = staging_dir.join(format!("{safe_name}.gguf"));
+        let _ = std::os::unix::fs::symlink(blob_path, &link);
+    }
+
+    let log_file = std::fs::File::create("/tmp/mesh-llm-llama-server.log")
+        .context("Failed to create llama-server log file")?;
+    let log_file2 = log_file.try_clone()?;
+
+    let args = vec![
+        "--models-dir".to_string(), staging_dir.to_string_lossy().to_string(),
+        "--models-max".to_string(), models_max.to_string(),
+        "--models-autoload".to_string(),
+        "-ngl".to_string(), "99".to_string(),
+        "--host".to_string(), "127.0.0.1".to_string(),
+        "--port".to_string(), http_port.to_string(),
+    ];
+
+    tracing::info!("llama-server args: {:?}", args);
+
+    let mut child = Command::new(&llama_server)
+        .args(&args)
+        .stdout(std::process::Stdio::from(log_file))
+        .stderr(std::process::Stdio::from(log_file2))
+        .spawn()
+        .with_context(|| format!("Failed to start llama-server at {}", llama_server.display()))?;
+
+    // Wait for health check — router mode starts fast since models load on-demand
+    let url = format!("http://localhost:{http_port}/health");
+    for i in 0..60 {
+        if i > 0 && i % 5 == 0 {
+            tracing::info!("Waiting for llama-server router to start... ({i}s)");
+        }
+        if reqwest_health_check(&url).await {
+            // Detach
+            tokio::spawn(async move {
+                let _ = child.wait().await;
+            });
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+
+    anyhow::bail!("llama-server (router) failed to start within 60s");
+}
+
 /// Find an available TCP port
-async fn find_free_port() -> Result<u16> {
+pub async fn find_free_port() -> Result<u16> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     drop(listener);

@@ -120,6 +120,168 @@ pub fn model_dirs() -> Vec<std::path::PathBuf> {
     dirs
 }
 
+/// An ollama model discovered from local manifests.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct OllamaModel {
+    /// Friendly display name (e.g. "ollama/glm-4.7-flash")
+    pub name: String,
+    /// Actual path to the GGUF blob on disk
+    pub path: std::path::PathBuf,
+    /// Size in bytes
+    pub size: u64,
+    /// Model family from ollama config (e.g. "glm4moelite")
+    pub family: Option<String>,
+    /// Model type from ollama config (e.g. "29.9B")
+    pub model_type: Option<String>,
+    /// Quantization from ollama config (e.g. "Q4_K_M")
+    pub quant: Option<String>,
+}
+
+/// Scan ollama's local model store for GGUF models.
+///
+/// Ollama stores models as content-addressed blobs:
+///   ~/.ollama/models/manifests/registry.ollama.ai/library/<model>/<tag>  → JSON manifest
+///   ~/.ollama/models/blobs/sha256-<hex>                                   → GGUF data
+///
+/// We parse manifests, find the model layer, verify it's a real GGUF, and return
+/// the mapping from friendly name → blob path.
+pub fn scan_ollama_models() -> Vec<OllamaModel> {
+    let home = match dirs::home_dir() {
+        Some(h) => h,
+        None => return vec![],
+    };
+    let ollama_dir = home.join(".ollama").join("models");
+    let manifests_dir = ollama_dir.join("manifests").join("registry.ollama.ai").join("library");
+    let blobs_dir = ollama_dir.join("blobs");
+
+    if !manifests_dir.exists() || !blobs_dir.exists() {
+        return vec![];
+    }
+
+    let mut models = Vec::new();
+
+    // Walk manifests/registry.ollama.ai/library/<model>/<tag>
+    let model_dirs = match std::fs::read_dir(&manifests_dir) {
+        Ok(d) => d,
+        Err(_) => return vec![],
+    };
+
+    for model_entry in model_dirs.flatten() {
+        if !model_entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let model_name = model_entry.file_name().to_string_lossy().to_string();
+        let tag_dirs = match std::fs::read_dir(model_entry.path()) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+
+        for tag_entry in tag_dirs.flatten() {
+            let tag_name = tag_entry.file_name().to_string_lossy().to_string();
+            let manifest_path = tag_entry.path();
+
+            if let Some(om) = parse_ollama_manifest(&manifest_path, &blobs_dir, &model_name, &tag_name) {
+                models.push(om);
+            }
+        }
+    }
+
+    models
+}
+
+/// Parse a single ollama manifest file and resolve the GGUF blob.
+fn parse_ollama_manifest(
+    manifest_path: &std::path::Path,
+    blobs_dir: &std::path::Path,
+    model_name: &str,
+    tag_name: &str,
+) -> Option<OllamaModel> {
+    let manifest_data = std::fs::read_to_string(manifest_path).ok()?;
+    let manifest: serde_json::Value = serde_json::from_str(&manifest_data).ok()?;
+
+    let layers = manifest.get("layers")?.as_array()?;
+
+    // Find the model layer (mediaType: "application/vnd.ollama.image.model")
+    let model_layer = layers.iter().find(|l| {
+        l.get("mediaType").and_then(|m| m.as_str()) == Some("application/vnd.ollama.image.model")
+    })?;
+
+    let digest = model_layer.get("digest")?.as_str()?;
+    let layer_size = model_layer.get("size").and_then(|s| s.as_u64()).unwrap_or(0);
+
+    // Skip tiny models (drafts, etc.) — same threshold as scan_local_models
+    if layer_size < 500_000_000 {
+        return None;
+    }
+
+    // Resolve blob path: digest "sha256:abc123" → blobs/sha256-abc123
+    let blob_filename = digest.replace(':', "-");
+    let blob_path = blobs_dir.join(&blob_filename);
+
+    if !blob_path.exists() {
+        return None;
+    }
+
+    // Verify it's actually a GGUF by checking magic bytes
+    if !is_gguf_file(&blob_path) {
+        return None;
+    }
+
+    // Try to read the config blob for metadata (model_family, file_type, etc.)
+    let config_digest = manifest.get("config")
+        .and_then(|c| c.get("digest"))
+        .and_then(|d| d.as_str());
+
+    let (family, model_type, quant) = if let Some(cd) = config_digest {
+        let config_blob = blobs_dir.join(cd.replace(':', "-"));
+        parse_ollama_config(&config_blob).unwrap_or((None, None, None))
+    } else {
+        (None, None, None)
+    };
+
+    // Build friendly name
+    let display_name = if tag_name == "latest" {
+        format!("ollama/{model_name}")
+    } else {
+        format!("ollama/{model_name}:{tag_name}")
+    };
+
+    Some(OllamaModel {
+        name: display_name,
+        path: blob_path,
+        size: layer_size,
+        family,
+        model_type,
+        quant,
+    })
+}
+
+/// Check if a file starts with the GGUF magic bytes.
+fn is_gguf_file(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let mut f = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let mut magic = [0u8; 4];
+    if f.read_exact(&mut magic).is_err() {
+        return false;
+    }
+    // GGUF magic: "GGUF" = [0x47, 0x47, 0x55, 0x46]
+    magic == [0x47, 0x47, 0x55, 0x46]
+}
+
+/// Parse an ollama config blob for model metadata.
+fn parse_ollama_config(config_path: &std::path::Path) -> Option<(Option<String>, Option<String>, Option<String>)> {
+    let data = std::fs::read_to_string(config_path).ok()?;
+    let config: serde_json::Value = serde_json::from_str(&data).ok()?;
+    let family = config.get("model_family").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let model_type = config.get("model_type").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let quant = config.get("file_type").and_then(|v| v.as_str()).map(|s| s.to_string());
+    Some((family, model_type, quant))
+}
+
 /// Scan model directories for GGUF files and return their stem names.
 pub fn scan_local_models() -> Vec<String> {
     let mut names = Vec::new();
@@ -141,18 +303,31 @@ pub fn scan_local_models() -> Vec<String> {
             }
         }
     }
+    // Also include ollama models
+    for om in scan_ollama_models() {
+        if !names.contains(&om.name) {
+            names.push(om.name);
+        }
+    }
     names.sort();
     names
 }
 
 /// Find a GGUF model file by stem name, searching all model directories.
-/// Returns the first match found (prefers ~/.models/ over goose dir).
+/// Also checks ollama models (by their friendly name like "ollama/glm-4.7-flash").
+/// Returns the first match found (prefers ~/.models/ over goose dir over ollama).
 pub fn find_model_path(stem: &str) -> std::path::PathBuf {
     let filename = format!("{}.gguf", stem);
     for dir in model_dirs() {
         let candidate = dir.join(&filename);
         if candidate.exists() {
             return candidate;
+        }
+    }
+    // Check ollama models by friendly name
+    for om in scan_ollama_models() {
+        if om.name == stem {
+            return om.path;
         }
     }
     // Fallback: return ~/.models/ path even if it doesn't exist
