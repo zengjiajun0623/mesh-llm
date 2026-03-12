@@ -930,9 +930,7 @@ async fn run_auto(mut cli: Cli, resolved_models: Vec<PathBuf>, requested_model_n
     };
     node.set_model_source(model_source).await;
     // Set all serving models (primary + extras)
-    let all_serving: Vec<String> = resolved_models.iter()
-        .map(|m| m.file_stem().unwrap_or_default().to_string_lossy().to_string())
-        .collect();
+    let all_serving = build_serving_list(&resolved_models, &model_name);
     node.set_serving_models(all_serving.clone()).await;
     node.set_models(all_serving).await;
     // Re-gossip so peers learn what we're serving
@@ -1895,4 +1893,70 @@ pub(crate) fn version_newer(a: &str, b: &str) -> bool {
         v.split('.').filter_map(|s| s.parse().ok()).collect()
     };
     parse(a) > parse(b)
+}
+
+/// Build the list of models this node is serving for gossip announcement.
+/// `resolved_models` comes from explicit `--model` args (may be empty for `--auto`).
+/// `model_name` is the actual model we're about to serve (always set).
+/// The primary model must always appear in the result.
+fn build_serving_list(resolved_models: &[PathBuf], model_name: &str) -> Vec<String> {
+    let mut all: Vec<String> = resolved_models.iter()
+        .map(|m| m.file_stem().unwrap_or_default().to_string_lossy().to_string())
+        .collect();
+    if !all.contains(&model_name.to_string()) {
+        all.insert(0, model_name.to_string());
+    }
+    all
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_build_serving_list_auto_no_resolved() {
+        // --auto: resolved_models is empty, model picked dynamically
+        let resolved: Vec<PathBuf> = vec![];
+        let result = build_serving_list(&resolved, "Qwen3-30B-A3B-Q4_K_M");
+        assert_eq!(result, vec!["Qwen3-30B-A3B-Q4_K_M"]);
+    }
+
+    #[test]
+    fn test_build_serving_list_explicit_single_model() {
+        // --model Qwen3-30B: resolved_models has the model
+        let resolved = vec![PathBuf::from("/home/.models/Qwen3-30B-A3B-Q4_K_M.gguf")];
+        let result = build_serving_list(&resolved, "Qwen3-30B-A3B-Q4_K_M");
+        assert_eq!(result, vec!["Qwen3-30B-A3B-Q4_K_M"]);
+        // No duplicate
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_build_serving_list_explicit_multi_model() {
+        // --model A --model B: both resolved
+        let resolved = vec![
+            PathBuf::from("/home/.models/Qwen3-30B-A3B-Q4_K_M.gguf"),
+            PathBuf::from("/home/.models/Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf"),
+        ];
+        let result = build_serving_list(&resolved, "Qwen3-30B-A3B-Q4_K_M");
+        assert_eq!(result, vec!["Qwen3-30B-A3B-Q4_K_M", "Qwen2.5-Coder-7B-Instruct-Q4_K_M"]);
+    }
+
+    #[test]
+    fn test_build_serving_list_split_gguf() {
+        // Split GGUF: file_stem is "MiniMax-M2.5-Q4_K_M-00001-of-00004"
+        // but model_name after stem extraction is the same
+        let resolved: Vec<PathBuf> = vec![];
+        let result = build_serving_list(&resolved, "MiniMax-M2.5-Q4_K_M-00001-of-00004");
+        assert_eq!(result, vec!["MiniMax-M2.5-Q4_K_M-00001-of-00004"]);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_version_newer() {
+        assert!(version_newer("0.33.1", "0.33.0"));
+        assert!(!version_newer("0.33.0", "0.33.0"));
+        assert!(!version_newer("0.32.0", "0.33.0"));
+    }
 }
