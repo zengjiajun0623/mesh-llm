@@ -20,6 +20,7 @@ class TodoHandler(BaseHTTPRequestHandler):
             length = int(self.headers['Content-Length'])
             body = json.loads(self.rfile.read(length))
             # BUG: no validation, no id assignment, no error handling
+            body['id'] = len(todos) + 1
             todos.append(body)
             self.send_response(200)
             self.end_headers()

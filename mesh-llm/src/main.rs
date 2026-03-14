@@ -918,10 +918,14 @@ async fn run_auto(mut cli: Cli, resolved_models: Vec<PathBuf>, requested_model_n
         }
     };
 
-    let model_name = model.file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
+    let model_name = {
+        let stem = model.file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        // Strip split GGUF suffix: "MiniMax-M2.5-Q4_K_M-00001-of-00004" → "MiniMax-M2.5-Q4_K_M"
+        router::strip_split_suffix_owned(&stem)
+    };
 
     // Set model source for gossip (so other joiners can discover it too)
     let model_source = if !cli.model.is_empty() {
@@ -1078,10 +1082,13 @@ async fn run_auto(mut cli: Cli, resolved_models: Vec<PathBuf>, requested_model_n
         node.regossip().await;
 
         for extra_model in resolved_models.iter().skip(1) {
-            let extra_name = extra_model.file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
+            let extra_name = {
+                let stem = extra_model.file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                router::strip_split_suffix_owned(&stem)
+            };
             let extra_node = node.clone();
             let extra_tunnel = tunnel_mgr.clone();
             let extra_bin = bin_dir.clone();
@@ -1938,11 +1945,16 @@ pub(crate) fn version_newer(a: &str, b: &str) -> bool {
 /// `model_name` is the actual model we're about to serve (always set).
 /// The primary model must always appear in the result.
 fn build_serving_list(resolved_models: &[PathBuf], model_name: &str) -> Vec<String> {
+    let clean_name = router::strip_split_suffix_owned(model_name);
     let mut all: Vec<String> = resolved_models.iter()
-        .map(|m| m.file_stem().unwrap_or_default().to_string_lossy().to_string())
+        .map(|m| {
+            let stem = m.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            // Strip split GGUF suffix: "Model-00001-of-00004" → "Model"
+            router::strip_split_suffix_owned(&stem)
+        })
         .collect();
-    if !all.contains(&model_name.to_string()) {
-        all.insert(0, model_name.to_string());
+    if !all.contains(&clean_name) {
+        all.insert(0, clean_name);
     }
     all
 }
@@ -1983,11 +1995,20 @@ mod tests {
 
     #[test]
     fn test_build_serving_list_split_gguf() {
-        // Split GGUF: file_stem is "MiniMax-M2.5-Q4_K_M-00001-of-00004"
-        // but model_name after stem extraction is the same
-        let resolved: Vec<PathBuf> = vec![];
+        // Split GGUF: file is "MiniMax-M2.5-Q4_K_M-00001-of-00004.gguf"
+        // Serving list should strip the split suffix
+        let resolved = vec![PathBuf::from("/home/.models/MiniMax-M2.5-Q4_K_M-00001-of-00004.gguf")];
+        let result = build_serving_list(&resolved, "MiniMax-M2.5-Q4_K_M");
+        assert_eq!(result, vec!["MiniMax-M2.5-Q4_K_M"]);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_build_serving_list_split_gguf_model_name_also_has_suffix() {
+        // If model_name also has the suffix (from dynamic pick), strip it too
+        let resolved = vec![PathBuf::from("/home/.models/MiniMax-M2.5-Q4_K_M-00001-of-00004.gguf")];
         let result = build_serving_list(&resolved, "MiniMax-M2.5-Q4_K_M-00001-of-00004");
-        assert_eq!(result, vec!["MiniMax-M2.5-Q4_K_M-00001-of-00004"]);
+        assert_eq!(result, vec!["MiniMax-M2.5-Q4_K_M"]);
         assert_eq!(result.len(), 1);
     }
 

@@ -231,7 +231,7 @@ pub fn profile_for(model_name: &str) -> Option<&'static ModelProfile> {
 }
 
 /// Strip split GGUF suffix like "-00001-of-00004" from a model name.
-fn strip_split_suffix(name: &str) -> &str {
+pub fn strip_split_suffix(name: &str) -> &str {
     // Pattern: -NNNNN-of-NNNNN at the end
     if let Some(idx) = name.rfind("-of-") {
         // Check that what follows is digits and what precedes is -digits
@@ -247,6 +247,11 @@ fn strip_split_suffix(name: &str) -> &str {
         }
     }
     name
+}
+
+/// Owned version of strip_split_suffix for contexts that need a String.
+pub fn strip_split_suffix_owned(name: &str) -> String {
+    strip_split_suffix(name).to_string()
 }
 
 // ── Request classification ──────────────────────────────────────────
