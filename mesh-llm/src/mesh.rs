@@ -853,6 +853,7 @@ impl Node {
                         (*id, conn)
                     }).collect()
                 };
+                tracing::debug!("Heartbeat tick: {} peers to check", peers_and_conns.len());
 
                 // Random-K gossip: pick a subset at larger mesh sizes.
                 // At ≤5 peers, talk to everyone (backward compat with current behavior).
@@ -865,12 +866,15 @@ impl Node {
                 }
 
                 for (peer_id, conn) in peers_and_conns {
+                    let hb_start = std::time::Instant::now();
                     let alive = if let Some(conn) = conn {
                         // Gossip as heartbeat — syncs state but won't re-discover dead peers
-                        tokio::time::timeout(
+                        let result = tokio::time::timeout(
                             std::time::Duration::from_secs(10),
                             node.initiate_gossip_inner(conn, peer_id, false),
-                        ).await.map(|r| r.is_ok()).unwrap_or(false)
+                        ).await.map(|r| r.is_ok()).unwrap_or(false);
+                        tracing::debug!("Heartbeat gossip {} = {} ({}ms)", peer_id.fmt_short(), if result { "ok" } else { "fail" }, hb_start.elapsed().as_millis());
+                        result
                     } else {
                         // No connection — try to reconnect using stored address
                         let addr = {
