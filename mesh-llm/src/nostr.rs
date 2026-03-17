@@ -476,15 +476,6 @@ pub async fn publish_watchdog(
                 };
 
                 if !mesh_listed && !our_peers.is_empty() {
-                    // Only take over if we're directly reachable (not relay-only)
-                    if !node.has_direct_connection().await {
-                        tracing::debug!(
-                            "Mesh listing missing but we're relay-only — not taking over"
-                        );
-                        tokio::time::sleep(Duration::from_secs(check_interval_secs)).await;
-                        continue;
-                    }
-
                     // Brief backoff with jitter to avoid stampede (3-10s)
                     let backoff = (rand::random::<u64>() % 7) + 3;
                     eprintln!("📡 Mesh listing missing from Nostr — waiting {backoff}s before taking over...");

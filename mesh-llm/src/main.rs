@@ -16,7 +16,7 @@ use clap::{Parser, Subcommand};
 use mesh::NodeRole;
 use std::path::PathBuf;
 
-pub const VERSION: &str = "0.36.0";
+pub const VERSION: &str = "0.36.1";
 
 #[derive(Parser, Debug)]
 #[command(name = "mesh-llm", version = VERSION, about = "P2P mesh for distributed llama.cpp inference over QUIC")]
@@ -327,9 +327,36 @@ async fn main() -> Result<()> {
             }
             nostr::AutoDecision::StartNew { models } => {
                 if cli.client {
-                    anyhow::bail!("No meshes found to join. Run without --client to start a new mesh.");
+                    // Retry discovery — meshes may appear later
+                    eprintln!("⏳ No meshes found yet — retrying in 15s...");
+                    let mut found = false;
+                    for attempt in 1..=20 {
+                        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+                        eprintln!("🔍 Retry {attempt}/20...");
+                        if let Ok(retry_meshes) = nostr::discover(&relays, &filter).await {
+                            if let nostr::AutoDecision::Join { candidates } = nostr::smart_auto(&retry_meshes, my_vram_gb, target_name) {
+                                let (token, mesh) = &candidates[0];
+                                if cli.mesh_name.is_none() {
+                                    if let Some(ref name) = mesh.listing.name {
+                                        cli.mesh_name = Some(name.clone());
+                                    }
+                                }
+                                eprintln!("✅ Joining: {} ({} nodes, {} models)",
+                                    mesh.listing.name.as_deref().unwrap_or("unnamed"),
+                                    mesh.listing.node_count,
+                                    mesh.listing.serving.len());
+                                cli.join.push(token.clone());
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                    if !found {
+                        anyhow::bail!("No meshes found after 5 minutes of retrying.");
+                    }
+                } else {
+                    start_new_mesh(&mut cli, &models, my_vram_gb);
                 }
-                start_new_mesh(&mut cli, &models, my_vram_gb);
             }
         }
     }

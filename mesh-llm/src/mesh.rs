@@ -1188,23 +1188,6 @@ impl Node {
         self.state.lock().await.peers.values().cloned().collect()
     }
 
-    /// Check if any peer connection is direct (not relayed).
-    /// A node with direct connections is likely reachable from the internet.
-    pub async fn has_direct_connection(&self) -> bool {
-        let conns: Vec<_> = self.state.lock().await
-            .connections.values().cloned().collect();
-        for conn in conns {
-            let mut paths = conn.paths();
-            let path_list = iroh::Watcher::get(&mut paths);
-            for path_info in path_list {
-                if path_info.is_selected() && path_info.is_ip() {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
     /// Open an HTTP tunnel bi-stream to a peer (tagged STREAM_TUNNEL_HTTP).
     /// If no connection exists, tries to connect on-demand (for passive nodes
     /// that learned about hosts from routing table but aren't directly connected).
