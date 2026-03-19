@@ -1036,7 +1036,7 @@ export function App() {
             </div>
           ) : null}
         </main>
-        <footer className="shrink-0 bg-card/70">
+        <footer className={cn("shrink-0 bg-card/70", section === 'chat' ? 'hidden md:block' : '')}>
           <div className="mx-auto flex h-8 w-full max-w-7xl items-center justify-center gap-2 px-4 text-xs text-muted-foreground">
             Mesh LLM {status?.version ? `v${status.version}` : 'version loading...'}
             {status?.latest_version ? (
@@ -1733,7 +1733,7 @@ function ChatPage(props: {
             <div
               ref={chatScrollRef}
               className={cn(
-                'h-full overflow-x-hidden overflow-y-auto px-3 py-4 md:px-6',
+                'min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-4 md:px-6',
                 messages.length === 0 ? '' : 'space-y-4',
               )}
             >
@@ -1761,7 +1761,7 @@ function ChatPage(props: {
               )}
             </div>
             <Separator />
-            <div className="space-y-2 overflow-hidden p-3 md:space-y-3 md:p-4">
+            <div className="shrink-0 box-border w-full max-w-full space-y-2 overflow-hidden p-3 md:space-y-3 md:p-4">
               <Textarea
                 ref={chatInputRef}
                 value={input}
@@ -1775,7 +1775,7 @@ function ChatPage(props: {
                 rows={2}
                 placeholder={props.canChat ? 'Send a prompt to the mesh...' : 'Waiting for a warm model...'}
                 disabled={!props.canChat || isSending}
-                className="min-h-[56px] md:min-h-[112px] resize-none"
+                className="min-h-[56px] md:min-h-[80px] resize-none text-base md:text-sm"
               />
               <div className="flex items-center justify-between gap-2">
                 <div className="hidden md:block text-xs text-muted-foreground">Enter to send. Shift+Enter for newline.</div>
