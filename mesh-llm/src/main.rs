@@ -2218,7 +2218,8 @@ async fn run_blackboard(
     let base = format!("http://127.0.0.1:{port}");
 
     // Quick connectivity check
-    if client.get(format!("{base}/api/status")).send().await.is_err() {
+    let status_resp = client.get(format!("{base}/api/status")).send().await;
+    if status_resp.is_err() {
         eprintln!("No mesh-llm node running on port {port}.");
         eprintln!();
         eprintln!("Blackboard requires a running mesh. Add --blackboard to any node (client or full GPU):");
@@ -2228,6 +2229,15 @@ async fn run_blackboard(
         eprintln!();
         eprintln!("See https://michaelneale.github.io/decentralized-inference for setup guide.");
         std::process::exit(1);
+    }
+
+    // Check if blackboard is enabled on this node
+    let feed_check = client.get(format!("{base}/api/blackboard/feed?limit=1")).send().await;
+    if let Ok(resp) = feed_check {
+        if resp.status().as_u16() == 404 {
+            eprintln!("Mesh is running but blackboard is not enabled. Restart with --blackboard.");
+            std::process::exit(1);
+        }
     }
 
     // Default: 24h for feed/search, override with --since
