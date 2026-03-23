@@ -72,7 +72,7 @@ import { cn } from './lib/utils';
 import githubBlackLogo from './assets/icons/github-invertocat-black.svg';
 import githubWhiteLogo from './assets/icons/github-invertocat-white.svg';
 
-const DOCS_URL = 'https://michaelneale.github.io/decentralized-inference';
+const DOCS_URL = 'https://docs.anarchai.org';
 
 type MeshModel = {
   name: string;

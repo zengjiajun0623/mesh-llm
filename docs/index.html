@@ -69,7 +69,7 @@
         <h1>Pool compute to run powerful open models</h1>
         <p>Turn spare GPU capacity into an auto-configured p2p inference cloud. Serve many models, access your private models from anywhere, or share compute with others.</p>
         <div class="hero-ctas">
-            <a href="https://mesh-llm-console.fly.dev/" class="btn btn-primary">Try it now</a>
+            <a href="https://www.anarchai.org/dashboard" class="btn btn-primary">Try it now</a>
             <a href="https://github.com/michaelneale/decentralized-inference" class="btn btn-secondary">View on GitHub</a>
         </div>
 
@@ -108,10 +108,6 @@
             </svg>
         </div>
 
-        <div style="margin-top:2rem; max-width:680px; width:100%;">
-            <img src="mesh.png" alt="mesh-llm console" style="width:100%; border-radius:10px; border:1px solid #1a1a1a;">
-        </div>
-
         <div class="tags">
             <span class="tag">OpenAI-compatible API</span>
             <span class="tag">Pipeline + expert parallelism</span>
@@ -122,15 +118,20 @@
         </div>
     </section>
 
+    <blockquote style="max-width:640px; margin:2.5rem auto; padding:1.5rem 2rem; border-left:3px solid #646cff; background:#1a1a2e; border-radius:8px; font-style:italic; color:#ccc; line-height:1.7;">
+        As part of the <a href="https://github.com/block/goose" style="color:#646cff;">Goose</a> project, we wanted to let people try more open models, but many didn't have capacity on their own. Open models continue to improve apace so it makes sense to make it easy to host and share as they get more capable and larger. That is what this experiment is about.
+        <div style="margin-top:0.75rem; font-style:normal; font-size:0.9em; color:#999;">— Mic N</div>
+    </blockquote>
+
     <section id="features">
         <div class="section-tag">Features</div>
-        <h2>Distributed inference that actually works</h2>
+        <h2>Distributed and decentralized inference</h2>
 
         <div class="features">
             <div class="feature">
                 <div class="feature-icon">⚡</div>
                 <h3>Automatic distribution</h3>
-                <p>Model fits on one machine? Solo mode, full speed. Too big? Dense models pipeline-split by layers across nodes. MoE models (Qwen3, GLM, Mixtral, DeepSeek) split by experts — auto-detected from GGUF metadata, zero config.</p>
+                <p>Model fits on one machine? Solo mode, full speed. Too big? Dense models pipeline-split by layers across nodes. MoE models (Qwen3, GLM, Mixtral, DeepSeek) split by experts — auto-detected from GGUF metadata, zero config. Splits are latency-aware — low-RTT peers preferred for tighter coordination.</p>
             </div>
             <div class="feature">
                 <div class="feature-icon">🧩</div>
@@ -290,7 +291,7 @@
         </div>
 
         <h3 style="font-size:0.95rem; color:#fff; margin:2rem 0 1rem;">Built-in catalog</h3>
-        <p style="font-size:0.82rem; color:var(--text2); margin-bottom:1rem;">Catalog models auto-download with their draft model for speculative decoding. Use any name below with <code>--model</code>.</p>
+        <p style="font-size:0.82rem; color:var(--text2); margin-bottom:1rem;">The catalog is a convenience — it changes as new models come out. Catalog models auto-download with their draft model for speculative decoding. Any GGUF model works, whether it's in the catalog or not.</p>
         <div style="overflow-x:auto;">
         <table style="width:100%; font-size:0.75rem; border-collapse:collapse; color:var(--text);">
             <thead>
@@ -326,50 +327,26 @@
         <p style="font-size:0.75rem; color:var(--text3); margin-top:0.8rem;">Full catalog: <code>mesh-llm download</code> · Not in the catalog? Use a HuggingFace URL — any GGUF works.</p>
     </section>
 
-    <section id="running">
-        <div class="section-tag">Running a mesh</div>
-        <h2>Common patterns</h2>
-        <p class="section-lead">Start solo or with friends. Every node gets the same API.</p>
-
-        <div class="code-block">
-            <span class="comment"># Solo — one machine, one model</span><br>
-            <span class="cmd">mesh-llm</span> <span class="flag">--model</span> <span class="val">Qwen3-32B</span><br><br>
-
-            <span class="comment"># Join the public mesh (auto-discover, auto-assign model)</span><br>
-            <span class="cmd">mesh-llm</span> <span class="flag">--auto</span><br><br>
-
-            <span class="comment"># Join as API-only client (no GPU contribution)</span><br>
-            <span class="cmd">mesh-llm</span> <span class="flag">--client</span> <span class="flag">--auto</span><br><br>
-
-            <span class="comment"># Private mesh — share the printed token with friends</span><br>
-            <span class="cmd">mesh-llm</span> <span class="flag">--model</span> <span class="val">Qwen2.5-72B</span><br>
-            <span class="comment"># On other machines:</span><br>
-            <span class="cmd">mesh-llm</span> <span class="flag">--join</span> <span class="val">&lt;token&gt;</span><br><br>
-
-            <span class="comment"># Named mesh — everyone runs the same command</span><br>
-            <span class="cmd">mesh-llm</span> <span class="flag">--auto</span> <span class="flag">--model</span> <span class="val">GLM-4.7-Flash</span> <span class="flag">--mesh-name</span> <span class="val">"poker-night"</span><br><br>
-
-            <span class="comment"># Multi-model — different nodes, different models</span><br>
-            <span class="cmd">mesh-llm</span> <span class="flag">--model</span> <span class="val">Qwen3-32B</span> <span class="flag">--model</span> <span class="val">GLM-4.7-Flash</span><br><br>
-
-            <span class="comment"># Use a model from HuggingFace (not in catalog)</span><br>
-            <span class="cmd">mesh-llm</span> <span class="flag">--model</span> <span class="val">https://huggingface.co/user/repo/resolve/main/model.gguf</span><br><br>
-
-            <span class="comment"># Launch Goose or Claude Code against the mesh</span><br>
-            <span class="cmd">mesh-llm</span> goose<br>
-            <span class="cmd">mesh-llm</span> claude
-        </div>
-    </section>
-
     <section class="cta-section">
         <h2>Try it</h2>
         <p>One binary. macOS Apple Silicon and Linux. MIT licensed.</p>
         <div class="cta-buttons">
-            <a href="https://mesh-llm-console.fly.dev/" class="btn btn-primary">Try it now</a>
+            <a href="https://www.anarchai.org/dashboard" class="btn btn-primary">Try it now</a>
             <a href="#install" class="btn btn-secondary">Install</a>
             <a href="https://github.com/michaelneale/decentralized-inference" class="btn btn-secondary">GitHub →</a>
             <a href="https://github.com/michaelneale/decentralized-inference/blob/main/ROADMAP.md" class="btn btn-secondary">Roadmap</a>
         </div>
+    </section>
+
+    <section style="max-width:640px; margin:0 auto; padding:2rem 1.5rem 3rem; font-size:0.82rem; color:var(--text3); line-height:1.7;">
+        <h3 style="font-size:0.85rem; color:var(--text2); margin-bottom:1rem;">Research &amp; roadmap</h3>
+        <p>We're exploring how to scale mesh inference with mixtures of models — routing and combining responses from heterogeneous LLMs. Two papers informing this work:</p>
+        <ul style="margin:0.8rem 0; padding-left:1.2rem;">
+            <li><a href="https://arxiv.org/html/2507.00507v1" style="color:#646cff;">LLM-Mesh</a> — resource-efficient serverless LLM inference across heterogeneous hardware</li>
+            <li><a href="https://arxiv.org/pdf/2601.16863" style="color:#646cff;">Mixture of Models / NSED</a> — self-evaluating deliberation across models (Peeramid Labs)</li>
+        </ul>
+        <p>For current plans and work items, see the <a href="https://github.com/michaelneale/decentralized-inference/blob/main/ROADMAP.md" style="color:#646cff;">Roadmap</a> and <a href="https://github.com/michaelneale/decentralized-inference/blob/main/mesh-llm/TODO.md" style="color:#646cff;">TODO</a> on GitHub.</p>
+        <p style="margin-top:0.8rem;">Come say hi on <a href="https://github.com/block/goose?tab=readme-ov-file#goose-around-with-us" style="color:#646cff;">Discord</a> — we're in the Goose community.</p>
     </section>
 
     <footer><p>mesh-llm — open source under MIT. Built with Rust, iroh, llama.cpp.</p></footer>
