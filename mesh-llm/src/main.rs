@@ -2324,7 +2324,7 @@ fn chrono_format(ts: u64) -> String {
 }
 
 fn install_skill() -> Result<()> {
-    let skill_content = include_str!("../../.skills/knowledge/SKILL.md");
+    let skill_content = include_str!("../skills/knowledge/SKILL.md");
     let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
     let skill_dir = home.join(".pi").join("agent").join("skills").join("knowledge");
     std::fs::create_dir_all(&skill_dir)?;
