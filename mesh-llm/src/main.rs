@@ -138,7 +138,7 @@ struct Cli {
     #[arg(long)]
     nostr_relay: Vec<String>,
 
-    /// Enable the knowledge whiteboard — share text messages across the mesh.
+    /// Enable the knowledge whiteboard — share text messages across the mesh. Works on any node (with or without a model).
     #[arg(long)]
     knowledge: bool,
 
@@ -2221,7 +2221,7 @@ async fn run_knowledge(
     if client.get(format!("{base}/api/status")).send().await.is_err() {
         eprintln!("No mesh-llm node running on port {port}.");
         eprintln!();
-        eprintln!("Knowledge requires a running mesh. Start one with --knowledge:");
+        eprintln!("Knowledge requires a running mesh. Add --knowledge to any node (client or full GPU):");
         eprintln!("  Private mesh:  mesh-llm --client --knowledge  (share the join token printed out)");
         eprintln!("  Join a mesh:   mesh-llm --client --knowledge --join <token>");
         eprintln!("  Public mesh:   mesh-llm --client --knowledge --auto");
