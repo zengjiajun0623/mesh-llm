@@ -2219,7 +2219,14 @@ async fn run_knowledge(
 
     // Quick connectivity check
     if client.get(format!("{base}/api/status")).send().await.is_err() {
-        eprintln!("Cannot reach mesh-llm on port {port} — is it running with --knowledge?");
+        eprintln!("No mesh-llm node running on port {port}.");
+        eprintln!();
+        eprintln!("Knowledge requires a running mesh. Start one with --knowledge:");
+        eprintln!("  Private mesh:  mesh-llm --client --knowledge");
+        eprintln!("  Join a mesh:   mesh-llm --client --knowledge --join <token>");
+        eprintln!("  Public mesh:   mesh-llm --client --knowledge --auto");
+        eprintln!();
+        eprintln!("See https://michaelneale.github.io/decentralized-inference for setup guide.");
         std::process::exit(1);
     }
 
