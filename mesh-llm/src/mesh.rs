@@ -24,7 +24,7 @@ pub struct ModelDemand {
 }
 
 /// How long a demand entry stays relevant without being refreshed.
-pub const DEMAND_TTL_SECS: u64 = 7200; // 2 hours
+pub const DEMAND_TTL_SECS: u64 = 86400; // 24 hours
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
