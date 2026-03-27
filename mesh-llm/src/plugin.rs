@@ -1,8 +1,8 @@
 use anyhow::{anyhow, bail, Context, Result};
 use prost::Message;
 use rmcp::model::{
-    CallToolResult as McpCallToolResult, ErrorCode, InitializeRequestParams,
-    ListToolsResult, PaginatedRequestParams, ServerInfo,
+    CallToolResult as McpCallToolResult, ErrorCode, InitializeRequestParams, ListToolsResult,
+    PaginatedRequestParams, ServerInfo,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -271,17 +271,18 @@ impl PluginManager {
                 args = %format_args_for_log(&spec.args),
                 "Loading plugin"
             );
-            let plugin = match ExternalPlugin::spawn(spec, mesh_tx.clone(), rpc_bridge.clone()).await {
-                Ok(plugin) => plugin,
-                Err(err) => {
-                    tracing::error!(
-                        plugin = %spec.name,
-                        error = %err,
-                        "Plugin failed to load"
-                    );
-                    return Err(err);
-                }
-            };
+            let plugin =
+                match ExternalPlugin::spawn(spec, mesh_tx.clone(), rpc_bridge.clone()).await {
+                    Ok(plugin) => plugin,
+                    Err(err) => {
+                        tracing::error!(
+                            plugin = %spec.name,
+                            error = %err,
+                            "Plugin failed to load"
+                        );
+                        return Err(err);
+                    }
+                };
             let summary = plugin.summary.lock().await.clone();
             tracing::info!(
                 plugin = %summary.name,
@@ -293,7 +294,10 @@ impl PluginManager {
             plugins.insert(spec.name.clone(), plugin);
         }
         let manager = Self {
-            inner: Arc::new(PluginManagerInner { plugins, rpc_bridge }),
+            inner: Arc::new(PluginManagerInner {
+                plugins,
+                rpc_bridge,
+            }),
         };
         manager.start_supervisor();
         Ok(manager)
@@ -308,11 +312,7 @@ impl PluginManager {
     }
 
     pub async fn is_enabled(&self, name: &str) -> bool {
-        if let Some(plugin) = self
-            .inner
-            .plugins
-            .get(name)
-        {
+        if let Some(plugin) = self.inner.plugins.get(name) {
             let summary = plugin.summary.lock().await;
             summary.enabled && summary.status == "running"
         } else {
@@ -366,15 +366,6 @@ impl PluginManager {
             .get(plugin_name)
             .with_context(|| format!("Unknown plugin '{plugin_name}'"))?;
         plugin.mcp_notify(method, params).await
-    }
-
-    pub async fn server_info(&self, name: &str) -> Result<ServerInfo> {
-        let plugin = self
-            .inner
-            .plugins
-            .get(name)
-            .with_context(|| format!("Unknown plugin '{name}'"))?;
-        plugin.server_info().await
     }
 
     pub async fn list_server_infos(&self) -> Vec<(String, ServerInfo)> {
@@ -482,7 +473,9 @@ impl ExternalPlugin {
     async fn supervise(&self) -> Result<()> {
         self.ensure_running().await?;
         let response = self
-            .request(proto::envelope::Payload::HealthRequest(proto::HealthRequest {}))
+            .request(proto::envelope::Payload::HealthRequest(
+                proto::HealthRequest {},
+            ))
             .await?;
         match response.payload {
             Some(proto::envelope::Payload::HealthResponse(resp))
@@ -604,7 +597,11 @@ impl ExternalPlugin {
             let init = match response.payload {
                 Some(proto::envelope::Payload::InitializeResponse(resp)) => resp,
                 Some(proto::envelope::Payload::ErrorResponse(err)) => {
-                    bail!("Plugin '{}' rejected initialize: {}", self.spec.name, err.message)
+                    bail!(
+                        "Plugin '{}' rejected initialize: {}",
+                        self.spec.name,
+                        err.message
+                    )
                 }
                 _ => bail!(
                     "Plugin '{}' returned an unexpected initialize payload",
@@ -643,8 +640,13 @@ impl ExternalPlugin {
             }
         };
 
-        let server_info: ServerInfo = serde_json::from_str(&init.server_info_json)
-            .with_context(|| format!("Plugin '{}' returned invalid server_info_json", self.spec.name))?;
+        let server_info: ServerInfo =
+            serde_json::from_str(&init.server_info_json).with_context(|| {
+                format!(
+                    "Plugin '{}' returned invalid server_info_json",
+                    self.spec.name
+                )
+            })?;
         *self.server_info.lock().await = Some(server_info.clone());
 
         let tools = if server_info.capabilities.tools.is_some() {
@@ -662,8 +664,8 @@ impl ExternalPlugin {
             match response {
                 Ok(envelope) => match envelope.payload {
                     Some(proto::envelope::Payload::RpcResponse(resp)) => {
-                        let result: ListToolsResult =
-                            serde_json::from_str(&resp.result_json).with_context(|| {
+                        let result: ListToolsResult = serde_json::from_str(&resp.result_json)
+                            .with_context(|| {
                                 format!(
                                     "Plugin '{}' returned invalid result for 'tools/list'",
                                     self.spec.name
@@ -675,8 +677,10 @@ impl ExternalPlugin {
                             .map(|tool| ToolSummary {
                                 name: tool.name.to_string(),
                                 description: tool.description.unwrap_or_default().to_string(),
-                                input_schema_json: serde_json::to_string(tool.input_schema.as_ref())
-                                    .unwrap_or_else(|_| "{}".into()),
+                                input_schema_json: serde_json::to_string(
+                                    tool.input_schema.as_ref(),
+                                )
+                                .unwrap_or_else(|_| "{}".into()),
                             })
                             .collect()
                     }
@@ -731,14 +735,17 @@ impl ExternalPlugin {
         if info.capabilities.tools.is_none() {
             return Ok(Vec::new());
         }
-        let result: ListToolsResult = self.mcp_request("tools/list", None::<PaginatedRequestParams>).await?;
+        let result: ListToolsResult = self
+            .mcp_request("tools/list", None::<PaginatedRequestParams>)
+            .await?;
         Ok(result
             .tools
             .into_iter()
             .map(|tool| ToolSummary {
                 name: tool.name.to_string(),
                 description: tool.description.unwrap_or_default().to_string(),
-                input_schema_json: serde_json::to_string(tool.input_schema.as_ref()).unwrap_or_else(|_| "{}".into()),
+                input_schema_json: serde_json::to_string(tool.input_schema.as_ref())
+                    .unwrap_or_else(|_| "{}".into()),
             })
             .collect())
     }
@@ -781,7 +788,9 @@ impl ExternalPlugin {
                     )
                 })
             }
-            Some(proto::envelope::Payload::ErrorResponse(err)) => Err(plugin_error(&self.spec.name, method, &err)),
+            Some(proto::envelope::Payload::ErrorResponse(err)) => {
+                Err(plugin_error(&self.spec.name, method, &err))
+            }
             _ => bail!(
                 "Plugin '{}' returned an unexpected RPC payload for '{}'",
                 self.spec.name,
@@ -805,8 +814,11 @@ impl ExternalPlugin {
     }
 
     async fn send_channel_message(&self, message: proto::ChannelMessage) -> Result<()> {
-        self.send_unsolicited(proto::envelope::Payload::ChannelMessage(message), "messages")
-            .await
+        self.send_unsolicited(
+            proto::envelope::Payload::ChannelMessage(message),
+            "messages",
+        )
+        .await
     }
 
     async fn send_bulk_transfer_message(&self, message: proto::BulkTransferMessage) -> Result<()> {
@@ -844,11 +856,7 @@ impl ExternalPlugin {
         bail!("Plugin '{}' request failed after restart", self.spec.name)
     }
 
-    async fn send_unsolicited(
-        &self,
-        payload: proto::envelope::Payload,
-        kind: &str,
-    ) -> Result<()> {
+    async fn send_unsolicited(&self, payload: proto::envelope::Payload, kind: &str) -> Result<()> {
         for attempt in 0..2 {
             self.ensure_running().await?;
             let (generation, outbound_tx, _) = self.runtime_handles().await?;
@@ -1115,11 +1123,7 @@ fn forward_plugin_notification(
     tokio::spawn(async move {
         if let Some(bridge) = rpc_bridge.lock().await.clone() {
             bridge
-                .handle_notification(
-                    plugin_name,
-                    notification.method,
-                    notification.params_json,
-                )
+                .handle_notification(plugin_name, notification.method, notification.params_json)
                 .await;
         }
     });
@@ -1254,27 +1258,12 @@ pub(crate) async fn send_plugin_channel_message(
     .await
 }
 
-pub(crate) async fn send_plugin_bulk_transfer_message(
-    stream: &mut LocalStream,
-    plugin_id: &str,
-    message: proto::BulkTransferMessage,
-) -> Result<()> {
-    write_envelope(
-        stream,
-        &proto::Envelope {
-            protocol_version: PROTOCOL_VERSION,
-            plugin_id: plugin_id.to_string(),
-            request_id: 0,
-            payload: Some(proto::envelope::Payload::BulkTransferMessage(message)),
-        },
-    )
-    .await
-}
-
 async fn connect_to_host(endpoint: &str, transport: &str) -> Result<LocalStream> {
     match transport {
         #[cfg(unix)]
-        "unix" => Ok(LocalStream::Unix(tokio::net::UnixStream::connect(endpoint).await?)),
+        "unix" => Ok(LocalStream::Unix(
+            tokio::net::UnixStream::connect(endpoint).await?,
+        )),
         #[cfg(windows)]
         "pipe" => Ok(LocalStream::PipeClient(
             tokio::net::windows::named_pipe::ClientOptions::new().open(endpoint)?,
@@ -1349,7 +1338,10 @@ fn summarize_capabilities(server_info: &ServerInfo, extra: &[String]) -> Vec<Str
     capabilities
 }
 
-pub(crate) async fn write_envelope(stream: &mut LocalStream, envelope: &proto::Envelope) -> Result<()> {
+pub(crate) async fn write_envelope(
+    stream: &mut LocalStream,
+    envelope: &proto::Envelope,
+) -> Result<()> {
     let mut body = Vec::new();
     envelope.encode(&mut body)?;
     stream.write_all(&(body.len() as u32).to_le_bytes()).await?;
@@ -1397,7 +1389,10 @@ fn format_slice_for_log(values: &[String]) -> String {
 }
 
 fn format_tool_names_for_log(tools: &[ToolSummary]) -> String {
-    let names = tools.iter().map(|tool| tool.name.clone()).collect::<Vec<_>>();
+    let names = tools
+        .iter()
+        .map(|tool| tool.name.clone())
+        .collect::<Vec<_>>();
     format_slice_for_log(&names)
 }
 

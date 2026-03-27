@@ -1,8 +1,7 @@
 use anyhow::{bail, Context, Result};
 use prost::Message;
 use rmcp::model::{
-    CallToolResult, Content, Implementation, ListToolsResult, ServerCapabilities, ServerInfo,
-    Tool,
+    CallToolResult, Content, Implementation, ListToolsResult, ServerCapabilities, ServerInfo, Tool,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -12,6 +11,7 @@ use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
+#[allow(dead_code)]
 mod proto {
     include!(concat!(env!("OUT_DIR"), "/meshllm.plugin.v1.rs"));
 }
@@ -32,7 +32,9 @@ async fn connect(endpoint: &str) -> Result<LocalStream> {
 }
 
 #[cfg(not(unix))]
-compile_error!("plugin-surface example currently supports unix-domain socket plugin transport only");
+compile_error!(
+    "plugin-surface example currently supports unix-domain socket plugin transport only"
+);
 
 #[derive(Debug, Deserialize, Default)]
 struct SnapshotParams {
@@ -329,8 +331,8 @@ impl ExampleState {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let endpoint = std::env::var("MESH_LLM_PLUGIN_ENDPOINT")
-        .context("MESH_LLM_PLUGIN_ENDPOINT is not set")?;
+    let endpoint =
+        std::env::var("MESH_LLM_PLUGIN_ENDPOINT").context("MESH_LLM_PLUGIN_ENDPOINT is not set")?;
     let transport =
         std::env::var("MESH_LLM_PLUGIN_TRANSPORT").unwrap_or_else(|_| "unix".to_string());
     if transport != "unix" {
@@ -505,11 +507,13 @@ async fn handle_rpc_request(
                 result_json: serde_json::to_string(&result)?,
             }))
         }
-        method => Ok(proto::envelope::Payload::ErrorResponse(proto::ErrorResponse {
-            code: -32601,
-            message: format!("unsupported method '{method}'"),
-            data_json: String::new(),
-        })),
+        method => Ok(proto::envelope::Payload::ErrorResponse(
+            proto::ErrorResponse {
+                code: -32601,
+                message: format!("unsupported method '{method}'"),
+                data_json: String::new(),
+            },
+        )),
     }
 }
 

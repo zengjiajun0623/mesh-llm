@@ -1,6 +1,5 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use rmcp::{
-    ErrorData, RoleServer, ServerHandler, ServiceExt,
     model::{
         CallToolRequestParams, CallToolResult, CancelTaskParams, CancelTaskResult, ClientResult,
         CompleteRequestParams, CompleteResult, CreateElicitationRequest,
@@ -15,6 +14,7 @@ use rmcp::{
     },
     service::{NotificationContext, Peer, RequestContext},
     transport::io::stdio,
+    ErrorData, RoleServer, ServerHandler, ServiceExt,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -77,14 +77,17 @@ impl PluginRpcBridge for ActiveBridge {
                         _ => Err(proto_error::internal("unexpected ping response")),
                     }
                 }
-                "roots/list" => to_json_string(
-                    &peer.list_roots().await.map_err(proto_error::from_service)?,
-                ),
+                "roots/list" => {
+                    to_json_string(&peer.list_roots().await.map_err(proto_error::from_service)?)
+                }
                 "sampling/createMessage" => {
                     let params =
                         deserialize_required::<CreateMessageRequestParams>(params, &method)?;
                     to_json_string(
-                        &peer.create_message(params).await.map_err(proto_error::from_service)?,
+                        &peer
+                            .create_message(params)
+                            .await
+                            .map_err(proto_error::from_service)?,
                     )
                 }
                 "elicitation/create" => {
@@ -198,7 +201,11 @@ impl PluginMcpServer {
             }
             let result: ListToolsResult = self
                 .plugin_manager
-                .mcp_request(&plugin_name, "tools/list", Option::<PaginatedRequestParams>::None)
+                .mcp_request(
+                    &plugin_name,
+                    "tools/list",
+                    Option::<PaginatedRequestParams>::None,
+                )
                 .await
                 .map_err(internal_error)?;
             for tool in result.tools {
@@ -285,7 +292,12 @@ impl ServerHandler for PluginMcpServer {
     ) -> Result<ListToolsResult, ErrorData> {
         self.refresh_peer(context.peer.clone()).await;
         Ok(ListToolsResult {
-            tools: self.discover_tools().await?.into_values().map(|entry| entry.tool).collect(),
+            tools: self
+                .discover_tools()
+                .await?
+                .into_values()
+                .map(|entry| entry.tool)
+                .collect(),
             meta: None,
             next_cursor: None,
         })
@@ -532,7 +544,11 @@ impl ServerHandler for PluginMcpServer {
             }
             let result: ListTasksResult = self
                 .plugin_manager
-                .mcp_request(&plugin_name, "tasks/list", Option::<PaginatedRequestParams>::None)
+                .mcp_request(
+                    &plugin_name,
+                    "tasks/list",
+                    Option::<PaginatedRequestParams>::None,
+                )
                 .await
                 .map_err(internal_error)?;
             tasks.extend(result.tasks);
@@ -679,7 +695,9 @@ fn to_json_string<T: Serialize>(value: &T) -> Result<String, plugin::proto::Erro
     serde_json::to_string(value).map_err(|err| proto_error::from_anyhow(err.into()))
 }
 
-fn parse_optional_value(raw: &str) -> Result<Option<serde_json::Value>, plugin::proto::ErrorResponse> {
+fn parse_optional_value(
+    raw: &str,
+) -> Result<Option<serde_json::Value>, plugin::proto::ErrorResponse> {
     plugin::parse_optional_json(raw).map_err(proto_error::from_anyhow)
 }
 
@@ -734,7 +752,7 @@ fn canonical_name(plugin_name: &str, local_name: &str) -> String {
 
 mod proto_error {
     use anyhow::Error;
-    use rmcp::{ServiceError, model::ErrorCode};
+    use rmcp::{model::ErrorCode, ServiceError};
 
     pub fn from_anyhow(err: Error) -> crate::plugin::proto::ErrorResponse {
         crate::plugin::proto::ErrorResponse {

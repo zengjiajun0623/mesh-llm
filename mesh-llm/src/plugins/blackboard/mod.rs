@@ -41,7 +41,6 @@ pub struct BlackboardItem {
     pub timestamp: u64,
     /// The message.
     pub text: String,
-
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -163,7 +162,11 @@ impl BlackboardStore {
     pub async fn post(&self, item: BlackboardItem) -> Result<BlackboardItem, String> {
         // Text length check
         if item.text.len() > MAX_TEXT_LEN {
-            return Err(format!("Message too long ({} bytes, max {})", item.text.len(), MAX_TEXT_LEN));
+            return Err(format!(
+                "Message too long ({} bytes, max {})",
+                item.text.len(),
+                MAX_TEXT_LEN
+            ));
         }
 
         // Rate limit check
@@ -173,7 +176,10 @@ impl BlackboardStore {
         // Prune old entries
         timestamps.retain(|&t| now - t < 60);
         if timestamps.len() >= RATE_LIMIT_PER_MIN {
-            return Err(format!("Rate limited ({} posts/min max)", RATE_LIMIT_PER_MIN));
+            return Err(format!(
+                "Rate limited ({} posts/min max)",
+                RATE_LIMIT_PER_MIN
+            ));
         }
         timestamps.push(now);
         drop(log);
@@ -201,7 +207,11 @@ impl BlackboardStore {
     /// Get items by IDs.
     pub async fn get_by_ids(&self, ids: &[u64]) -> Vec<BlackboardItem> {
         let items = self.items.lock().await;
-        items.iter().filter(|i| ids.contains(&i.id)).cloned().collect()
+        items
+            .iter()
+            .filter(|i| ids.contains(&i.id))
+            .cloned()
+            .collect()
     }
 
     /// Search items by multi-term OR matching (like megamind).
@@ -209,7 +219,8 @@ impl BlackboardStore {
     /// Results ranked by number of matching terms (most relevant first).
     /// `since` filters to items newer than this unix timestamp (0 = no filter).
     pub async fn search(&self, query: &str, since: u64) -> Vec<BlackboardItem> {
-        let terms: Vec<String> = query.to_lowercase()
+        let terms: Vec<String> = query
+            .to_lowercase()
             .split_whitespace()
             .filter(|w| !w.is_empty())
             .map(|w| w.to_string())
@@ -219,15 +230,21 @@ impl BlackboardStore {
         }
         let mut items = self.items.lock().await;
         self.prune_locked(&mut items);
-        let mut scored: Vec<(usize, BlackboardItem)> = items.iter()
+        let mut scored: Vec<(usize, BlackboardItem)> = items
+            .iter()
             .filter(|i| since == 0 || i.timestamp > since)
             .filter_map(|i| {
                 let text_lower = i.text.to_lowercase();
                 let from_lower = i.from.to_lowercase();
-                let hits = terms.iter()
+                let hits = terms
+                    .iter()
                     .filter(|t| text_lower.contains(t.as_str()) || from_lower.contains(t.as_str()))
                     .count();
-                if hits > 0 { Some((hits, i.clone())) } else { None }
+                if hits > 0 {
+                    Some((hits, i.clone()))
+                } else {
+                    None
+                }
             })
             .collect();
         // Sort by hits descending, then by timestamp descending
@@ -235,15 +252,18 @@ impl BlackboardStore {
         scored.into_iter().map(|(_, item)| item).collect()
     }
 
-
     /// Feed: items newer than a timestamp, optionally filtered by peer.
     #[allow(dead_code)]
     pub async fn feed(&self, since: u64, from: Option<&str>, limit: usize) -> Vec<BlackboardItem> {
         let mut items = self.items.lock().await;
         self.prune_locked(&mut items);
-        let mut result: Vec<_> = items.iter()
+        let mut result: Vec<_> = items
+            .iter()
             .filter(|i| i.timestamp > since)
-            .filter(|i| from.map(|f| i.from.to_lowercase().contains(&f.to_lowercase())).unwrap_or(true))
+            .filter(|i| {
+                from.map(|f| i.from.to_lowercase().contains(&f.to_lowercase()))
+                    .unwrap_or(true)
+            })
             .cloned()
             .collect();
         result.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
@@ -267,8 +287,8 @@ pub(crate) async fn run_plugin(
     mut stream: crate::plugin::LocalStream,
 ) -> anyhow::Result<()> {
     use rmcp::model::{
-        CallToolResult, ErrorCode, Implementation, ListToolsResult, ServerCapabilities,
-        ServerInfo, Tool,
+        CallToolResult, ErrorCode, Implementation, ListToolsResult, ServerCapabilities, ServerInfo,
+        Tool,
     };
     use std::sync::Arc;
 
@@ -459,7 +479,8 @@ pub(crate) async fn run_plugin(
                     "tools/call" => {
                         let params: ToolCallParams = serde_json::from_str(&call.params_json)?;
                         let arguments_json =
-                            serde_json::Value::Object(params.arguments.unwrap_or_default()).to_string();
+                            serde_json::Value::Object(params.arguments.unwrap_or_default())
+                                .to_string();
                         let result = match params.name.as_str() {
                             "feed" => {
                                 let request = serde_json::from_str::<FeedRequest>(&arguments_json)
@@ -474,26 +495,29 @@ pub(crate) async fn run_plugin(
                                         .await
                                 ))
                             }
-                            "search" => match serde_json::from_str::<SearchRequest>(&arguments_json) {
-                                Ok(request) => {
-                                    let mut items = store.search(&request.query, request.since).await;
-                                    items.truncate(request.limit.max(1));
-                                    CallToolResult::structured(json!(items))
+                            "search" => {
+                                match serde_json::from_str::<SearchRequest>(&arguments_json) {
+                                    Ok(request) => {
+                                        let mut items =
+                                            store.search(&request.query, request.since).await;
+                                        items.truncate(request.limit.max(1));
+                                        CallToolResult::structured(json!(items))
+                                    }
+                                    Err(err) => {
+                                        crate::plugin::write_envelope(
+                                            &mut stream,
+                                            &error_response(
+                                                &name,
+                                                envelope.request_id,
+                                                ErrorCode::INVALID_PARAMS.0,
+                                                format!("Invalid search arguments: {err}"),
+                                            ),
+                                        )
+                                        .await?;
+                                        continue;
+                                    }
                                 }
-                                Err(err) => {
-                                    crate::plugin::write_envelope(
-                                        &mut stream,
-                                        &error_response(
-                                            &name,
-                                            envelope.request_id,
-                                            ErrorCode::INVALID_PARAMS.0,
-                                            format!("Invalid search arguments: {err}"),
-                                        ),
-                                    )
-                                    .await?;
-                                    continue;
-                                }
-                            },
+                            }
                             "post" => match serde_json::from_str::<PostRequest>(&arguments_json) {
                                 Ok(request) => {
                                     let from = if request.from.trim().is_empty() {
@@ -610,10 +634,8 @@ pub(crate) async fn run_plugin(
                     }
                     BlackboardMessage::SyncDigest(ids) => {
                         let our_ids = store.ids().await;
-                        let missing: Vec<u64> = ids
-                            .into_iter()
-                            .filter(|id| !our_ids.contains(id))
-                            .collect();
+                        let missing: Vec<u64> =
+                            ids.into_iter().filter(|id| !our_ids.contains(id)).collect();
                         if !missing.is_empty() {
                             crate::plugin::send_plugin_channel_message(
                                 &mut stream,
@@ -670,7 +692,9 @@ pub fn pii_check(text: &str) -> Vec<String> {
 
     // Email addresses
     for word in text.split_whitespace() {
-        let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '@' && c != '.' && c != '-' && c != '_');
+        let w = word.trim_matches(|c: char| {
+            !c.is_alphanumeric() && c != '@' && c != '.' && c != '-' && c != '_'
+        });
         if w.contains('@') && w.contains('.') && w.len() > 5 {
             let parts: Vec<&str> = w.split('@').collect();
             if parts.len() == 2 && parts[1].contains('.') && parts[0].len() > 0 {
@@ -680,7 +704,9 @@ pub fn pii_check(text: &str) -> Vec<String> {
     }
 
     // API keys / tokens (common prefixes)
-    let key_prefixes = ["sk-", "pk-", "ghp_", "ghu_", "ghs_", "AKIA", "xoxb-", "xoxp-", "Bearer "];
+    let key_prefixes = [
+        "sk-", "pk-", "ghp_", "ghu_", "ghs_", "AKIA", "xoxb-", "xoxp-", "Bearer ",
+    ];
     for prefix in &key_prefixes {
         if text.contains(prefix) {
             issues.push(format!("Possible API key/token ({}...)", prefix));
@@ -689,11 +715,15 @@ pub fn pii_check(text: &str) -> Vec<String> {
 
     // High-entropy strings (likely secrets)
     for word in text.split_whitespace() {
-        let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '=' && c != '+' && c != '/');
+        let w =
+            word.trim_matches(|c: char| !c.is_alphanumeric() && c != '=' && c != '+' && c != '/');
         if w.len() >= 20 {
             let entropy = shannon_entropy(w);
             if entropy > 4.5 {
-                issues.push(format!("High-entropy string (possible secret): {}...", &w[..20.min(w.len())]));
+                issues.push(format!(
+                    "High-entropy string (possible secret): {}...",
+                    &w[..20.min(w.len())]
+                ));
             }
         }
     }
@@ -746,7 +776,9 @@ pub fn pii_scrub(text: &str) -> String {
 /// Shannon entropy in bits per character.
 fn shannon_entropy(s: &str) -> f64 {
     let len = s.len() as f64;
-    if len == 0.0 { return 0.0; }
+    if len == 0.0 {
+        return 0.0;
+    }
     let mut freq = [0u32; 256];
     for b in s.bytes() {
         freq[b as usize] += 1;
@@ -768,25 +800,38 @@ mod tests {
     #[test]
     fn test_pii_check_email() {
         let issues = pii_check("contact me at bob@example.com for details");
-        assert!(issues.iter().any(|i| i.contains("email")), "Should detect email");
+        assert!(
+            issues.iter().any(|i| i.contains("email")),
+            "Should detect email"
+        );
     }
 
     #[test]
     fn test_pii_check_api_key() {
         let issues = pii_check("use this key: sk-abc123xyz");
-        assert!(issues.iter().any(|i| i.contains("API key")), "Should detect API key prefix");
+        assert!(
+            issues.iter().any(|i| i.contains("API key")),
+            "Should detect API key prefix"
+        );
     }
 
     #[test]
     fn test_pii_check_clean() {
         let issues = pii_check("Set ctx-size to 2048 to fix CUDA OOM on 8GB cards");
-        assert!(issues.is_empty(), "Clean text should have no issues: {:?}", issues);
+        assert!(
+            issues.is_empty(),
+            "Clean text should have no issues: {:?}",
+            issues
+        );
     }
 
     #[test]
     fn test_pii_check_path() {
         let issues = pii_check("the file is at /Users/michael/secret/data.txt");
-        assert!(issues.iter().any(|i| i.contains("file path")), "Should detect private path");
+        assert!(
+            issues.iter().any(|i| i.contains("file path")),
+            "Should detect private path"
+        );
     }
 
     #[test]
@@ -815,8 +860,20 @@ mod tests {
     #[tokio::test]
     async fn test_store_search_single_term() {
         let store = BlackboardStore::new(true);
-        store.insert(BlackboardItem::new("alice".into(), "a".into(), "CUDA OOM fix".into())).await;
-        store.insert(BlackboardItem::new("bob".into(), "b".into(), "networking stuff".into())).await;
+        store
+            .insert(BlackboardItem::new(
+                "alice".into(),
+                "a".into(),
+                "CUDA OOM fix".into(),
+            ))
+            .await;
+        store
+            .insert(BlackboardItem::new(
+                "bob".into(),
+                "b".into(),
+                "networking stuff".into(),
+            ))
+            .await;
         let results = store.search("cuda", 0).await;
         assert_eq!(results.len(), 1);
         assert!(results[0].text.contains("CUDA"));
@@ -825,9 +882,27 @@ mod tests {
     #[tokio::test]
     async fn test_store_search_multi_term_or() {
         let store = BlackboardStore::new(true);
-        store.insert(BlackboardItem::new("alice".into(), "a".into(), "CUDA OOM fix".into())).await;
-        store.insert(BlackboardItem::new("bob".into(), "b".into(), "networking refactor".into())).await;
-        store.insert(BlackboardItem::new("carol".into(), "c".into(), "unrelated stuff".into())).await;
+        store
+            .insert(BlackboardItem::new(
+                "alice".into(),
+                "a".into(),
+                "CUDA OOM fix".into(),
+            ))
+            .await;
+        store
+            .insert(BlackboardItem::new(
+                "bob".into(),
+                "b".into(),
+                "networking refactor".into(),
+            ))
+            .await;
+        store
+            .insert(BlackboardItem::new(
+                "carol".into(),
+                "c".into(),
+                "unrelated stuff".into(),
+            ))
+            .await;
         // "CUDA networking" should match both alice and bob (OR)
         let results = store.search("CUDA networking", 0).await;
         assert_eq!(results.len(), 2);
@@ -836,9 +911,21 @@ mod tests {
     #[tokio::test]
     async fn test_store_search_ranking() {
         let store = BlackboardStore::new(true);
-        store.insert(BlackboardItem::new("alice".into(), "a".into(), "CUDA OOM on GPU".into())).await;
+        store
+            .insert(BlackboardItem::new(
+                "alice".into(),
+                "a".into(),
+                "CUDA OOM on GPU".into(),
+            ))
+            .await;
         std::thread::sleep(std::time::Duration::from_millis(1));
-        store.insert(BlackboardItem::new("bob".into(), "b".into(), "CUDA fix for GPU OOM issue".into())).await;
+        store
+            .insert(BlackboardItem::new(
+                "bob".into(),
+                "b".into(),
+                "CUDA fix for GPU OOM issue".into(),
+            ))
+            .await;
         // "CUDA OOM GPU" — bob matches 3 terms, alice matches 3 terms, bob is newer
         let results = store.search("CUDA OOM GPU", 0).await;
         assert_eq!(results.len(), 2);
