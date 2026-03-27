@@ -2139,11 +2139,7 @@ fn first_available_target(targets: &election::ModelTargets) -> election::Inferen
 }
 
 fn bundled_bin_name(name: &str) -> String {
-    if cfg!(windows) {
-        format!("{name}.exe")
-    } else {
-        name.to_string()
-    }
+    name.to_string()
 }
 
 fn has_bundled_llama_bins(dir: &Path) -> bool {
@@ -2484,13 +2480,8 @@ fn run_stop() -> Result<()> {
     use std::process::Command as Cmd;
     let mut killed = 0u32;
     for name in &["mesh-llm", "llama-server", "rpc-server"] {
-        let status = if cfg!(windows) {
-            let image_name = format!("{name}.exe");
-            Cmd::new("taskkill").args(["/IM", &image_name, "/F"]).status()
-        } else {
-            // pkill sends SIGTERM; ignore errors (process might not exist)
-            Cmd::new("pkill").arg("-f").arg(name).status()
-        };
+        // pkill sends SIGTERM; ignore errors (process might not exist)
+        let status = Cmd::new("pkill").arg("-f").arg(name).status();
         match status {
             Ok(s) if s.success() => {
                 eprintln!("🧹 Stopped {name}");

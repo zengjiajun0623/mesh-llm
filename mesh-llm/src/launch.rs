@@ -9,11 +9,7 @@ use tokio::net::TcpListener;
 use tokio::process::Command;
 
 fn bin_path(bin_dir: &Path, name: &str) -> PathBuf {
-    if cfg!(windows) {
-        bin_dir.join(format!("{name}.exe"))
-    } else {
-        bin_dir.join(name)
-    }
+    bin_dir.join(name)
 }
 
 fn temp_log_path(name: &str) -> PathBuf {
@@ -88,12 +84,6 @@ pub async fn start_rpc_server(
 /// Only kills rpc-servers with PPID 1 (parent died, adopted by init).
 /// Safe to call while a live mesh-llm has its own rpc-server child.
 pub async fn kill_orphan_rpc_servers() {
-    #[cfg(windows)]
-    {
-        return;
-    }
-
-    #[cfg(not(windows))]
     if let Ok(output) = std::process::Command::new("ps")
         .args(["-eo", "pid,ppid,comm"])
         .output()
@@ -120,16 +110,6 @@ pub async fn kill_orphan_rpc_servers() {
 
 /// Kill all running llama-server processes.
 pub async fn kill_llama_server() {
-    #[cfg(windows)]
-    {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/IM", "llama-server.exe", "/F"])
-            .status();
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        return;
-    }
-
-    #[cfg(not(windows))]
     let _ = std::process::Command::new("pkill")
         .args(["-f", "llama-server"])
         .status();

@@ -40,11 +40,6 @@ copy_runtime_libs() {
                 cp "$lib" "$bundle_dir/"
             done
             ;;
-        MINGW*|MSYS*|CYGWIN*)
-            for lib in "$BUILD_BIN_DIR"/*.dll; do
-                cp "$lib" "$bundle_dir/"
-            done
-            ;;
     esac
     shopt -u nullglob
 }
@@ -103,13 +98,6 @@ case "$os_name" in
         BIN_EXT=""
         ARCHIVE_EXT="tar.gz"
         STABLE_ASSET="mesh-llm-${TARGET_TRIPLE}.tar.gz"
-        LEGACY_ASSET=""
-        ;;
-    MINGW*|MSYS*|CYGWIN*)
-        TARGET_TRIPLE="x86_64-pc-windows-msvc"
-        BIN_EXT=".exe"
-        ARCHIVE_EXT="zip"
-        STABLE_ASSET="mesh-llm-${TARGET_TRIPLE}.zip"
         LEGACY_ASSET=""
         ;;
     *)

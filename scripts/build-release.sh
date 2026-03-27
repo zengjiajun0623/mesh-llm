@@ -58,12 +58,6 @@ case "$os_name" in
             -DGGML_METAL=OFF
         )
         ;;
-    MINGW*|MSYS*|CYGWIN*)
-        cmake_flags+=(
-            -DGGML_CUDA=OFF
-            -DGGML_METAL=OFF
-        )
-        ;;
     *)
         echo "Unsupported OS for release build: $os_name" >&2
         exit 1

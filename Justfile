@@ -16,9 +16,6 @@ build: build-mac
 build cuda_arch="":
     @scripts/build-linux.sh "{{ cuda_arch }}"
 
-[windows]
-build: build-windows
-
 # Build on macOS Apple Silicon (Metal + RPC)
 build-mac:
     #!/usr/bin/env bash
@@ -56,15 +53,9 @@ build-mac:
 build-linux cuda_arch="":
     @scripts/build-linux.sh "{{ cuda_arch }}"
 
-# Build on Windows for local/release use.
-
-# Uses the cross-platform release build path, which configures llama.cpp without CUDA/Metal.
-build-windows:
-    @scripts/build-release.sh
-
 # Build release artifacts for the current platform.
 
-# GitHub release builds use CPU backends on Linux/Windows and Metal on macOS.
+# GitHub release builds use CPU backends on Linux and Metal on macOS.
 release-build:
     @scripts/build-release.sh
 

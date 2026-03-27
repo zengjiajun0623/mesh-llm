@@ -30,15 +30,6 @@ just build
 
 Requires: `just`, `cmake`, Rust toolchain, Node.js + npm. NVIDIA GPU builds need `nvcc` (CUDA toolkit). CPU-only and Jetson/Tegra also work. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
-## Install (Windows)
-
-Download and extract:
-
-```powershell
-curl.exe -L https://github.com/michaelneale/mesh-llm/releases/latest/download/mesh-llm-x86_64-pc-windows-msvc.zip -o mesh-llm.zip
-tar -xf mesh-llm.zip
-```
-
 ## Run
 Once installed, you can run:
 

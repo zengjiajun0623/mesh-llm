@@ -60,7 +60,7 @@ git push origin main --tags
 
 Pushing a `v*` tag triggers `.github/workflows/release.yml`, which:
 
-- builds release bundles on macOS, Linux, and Windows
+- builds release bundles on macOS and Linux
 - uploads versioned assets such as `mesh-llm-v0.X.0-aarch64-apple-darwin.tar.gz`
 - uploads stable `latest` assets such as `mesh-llm-x86_64-unknown-linux-gnu.tar.gz`
 - keeps the legacy macOS `mesh-bundle.tar.gz` asset for the README install one-liner
@@ -73,12 +73,11 @@ After the workflow finishes, verify:
 - `mesh-bundle.tar.gz` still exists for macOS latest installs
 - `mesh-llm-aarch64-apple-darwin.tar.gz` exists
 - `mesh-llm-x86_64-unknown-linux-gnu.tar.gz` exists
-- `mesh-llm-x86_64-pc-windows-msvc.zip` exists
 
 ## Notes
 
 - The unversioned asset name `mesh-bundle.tar.gz` is still required for the README's macOS install one-liner.
-- Linux and Windows release bundles are built on GitHub-hosted runners without CUDA, so they are generic CPU bundles. CUDA-specific Linux builds still need a source build.
+- Linux release bundles are built on GitHub-hosted runners without CUDA, so they are generic CPU bundles. CUDA-specific Linux builds still need a source build.
 - `codesign` and `xattr` may be needed on the receiving machine if macOS Gatekeeper blocks unsigned binaries:
   ```bash
   codesign -s - /usr/local/bin/mesh-llm /usr/local/bin/rpc-server /usr/local/bin/llama-server

@@ -22,9 +22,6 @@ jobs:
           - name: macOS
             os: macos-14
             artifact_name: release-macos
-          - name: Windows
-            os: windows-latest
-            artifact_name: release-windows
 
     steps:
       - uses: actions/checkout@v4
@@ -43,9 +40,6 @@ jobs:
         with:
           workspaces: |
             . -> target
-
-      - if: runner.os == 'Windows'
-        uses: ilammy/msvc-dev-cmd@v1
 
       - name: Build release bundle
         shell: bash
