@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use crate::{download, launch, plugin, Cli, VERSION};
 
 const DEFAULT_RELEASE_REPO: &str = "michaelneale/mesh-llm";
+#[cfg(not(windows))]
 const INSTALL_SCRIPT_URL: &str =
     "https://raw.githubusercontent.com/michaelneale/mesh-llm/main/install.sh";
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -18,6 +19,7 @@ const SELF_UPDATE_DISABLED_ENV: &str = "MESH_LLM_NO_SELF_UPDATE";
 const SELF_UPDATE_REPO_ENV: &str = "MESH_LLM_SELF_UPDATE_REPO";
 
 enum InstallOutcome {
+    #[cfg(not(windows))]
     RestartNow,
     #[cfg_attr(not(windows), allow(dead_code))]
     HandoffAndExit,
@@ -485,6 +487,7 @@ fn collect_bundle_files(
     Ok(files)
 }
 
+#[cfg(not(windows))]
 fn backup_existing_file(
     install_dir: &Path,
     backup: &Path,
@@ -512,6 +515,7 @@ fn backup_existing_file(
     Ok(())
 }
 
+#[cfg(not(windows))]
 fn replace_bundle_files(
     install_dir: &Path,
     extracted: &Path,
@@ -730,6 +734,7 @@ try {{
     ))
 }
 
+#[cfg(not(windows))]
 fn rollback_bundle_replace(
     install_dir: &Path,
     backup: &Path,
