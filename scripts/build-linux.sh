@@ -2,12 +2,13 @@
 # build-linux.sh — build llama.cpp + mesh-llm on Linux
 #
 # Usage:
-#   scripts/build-linux.sh [--clean] [--backend cuda|rocm] [--cuda-arch SM_LIST] [--rocm-arch GFX_LIST]
+#   scripts/build-linux.sh [--clean] [--backend cuda|rocm|vulkan] [--cuda-arch SM_LIST] [--rocm-arch GFX_LIST]
 #
 # Examples:
 #   scripts/build-linux.sh
 #   scripts/build-linux.sh --backend cuda --cuda-arch '120;86'
 #   scripts/build-linux.sh --backend rocm --rocm-arch 'gfx942;gfx90a'
+#   scripts/build-linux.sh --backend vulkan
 #
 # Must be run from the repository root.
 
@@ -81,6 +82,20 @@ detect_backend() {
         echo rocm
         return 0
     fi
+    if command -v glslc &>/dev/null; then
+        if command -v vulkaninfo &>/dev/null && vulkaninfo --summary >/dev/null 2>&1; then
+            echo vulkan
+            return 0
+        fi
+        if pkg-config --exists vulkan 2>/dev/null; then
+            echo vulkan
+            return 0
+        fi
+        if [[ -n "${VULKAN_SDK:-}" ]]; then
+            echo vulkan
+            return 0
+        fi
+    fi
     echo cuda
 }
 
@@ -107,6 +122,33 @@ locate_hip_toolchain() {
             return 0
         fi
     done
+    return 1
+}
+
+locate_vulkan_toolchain() {
+    if ! command -v glslc &>/dev/null; then
+        if [[ -n "${VULKAN_SDK:-}" && -x "$VULKAN_SDK/bin/glslc" ]]; then
+            export PATH="$VULKAN_SDK/bin:$PATH"
+        else
+            return 1
+        fi
+    fi
+
+    if pkg-config --exists vulkan 2>/dev/null; then
+        return 0
+    fi
+
+    if [[ -f /usr/include/vulkan/vulkan.h || -f /usr/local/include/vulkan/vulkan.h ]]; then
+        return 0
+    fi
+
+    if [[ -n "${VULKAN_SDK:-}" ]]; then
+        export CMAKE_PREFIX_PATH="${VULKAN_SDK}${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
+        if [[ -f "$VULKAN_SDK/include/vulkan/vulkan.h" ]]; then
+            return 0
+        fi
+    fi
+
     return 1
 }
 
@@ -144,8 +186,19 @@ case "$BACKEND" in
         echo "Building Linux backend: ROCm/HIP"
         echo "Using hipcc: $(command -v hipcc)"
         ;;
+    vulkan)
+        locate_vulkan_toolchain || {
+            echo "Error: Vulkan SDK/development files not found." >&2
+            echo "  Need both the Vulkan headers/loader and 'glslc' in your PATH." >&2
+            echo "  Ubuntu/Debian: sudo apt install libvulkan-dev glslc" >&2
+            echo "  Arch Linux:    sudo pacman -S vulkan-headers shaderc" >&2
+            exit 1
+        }
+        echo "Building Linux backend: Vulkan"
+        echo "Using glslc: $(command -v glslc)"
+        ;;
     *)
-        echo "Error: unsupported backend '$BACKEND' (expected 'cuda' or 'rocm')." >&2
+        echo "Error: unsupported backend '$BACKEND' (expected 'cuda', 'rocm', or 'vulkan')." >&2
         exit 1
         ;;
 esac
@@ -175,12 +228,13 @@ if [[ "$BACKEND" == "cuda" ]]; then
     cmake -B "$BUILD_DIR" -S "$LLAMA_DIR" \
         -DGGML_CUDA=ON \
         -DGGML_HIP=OFF \
+        -DGGML_VULKAN=OFF \
         -DGGML_METAL=OFF \
         -DGGML_RPC=ON \
         -DBUILD_SHARED_LIBS=OFF \
         -DLLAMA_OPENSSL=OFF \
         -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCH"
-else
+elif [[ "$BACKEND" == "rocm" ]]; then
     if command -v hipconfig &>/dev/null; then
         export HIPCXX="$(hipconfig -l)/clang"
         export HIP_PATH="$(hipconfig -R)"
@@ -188,12 +242,22 @@ else
     cmake -B "$BUILD_DIR" -S "$LLAMA_DIR" \
         -DGGML_CUDA=OFF \
         -DGGML_HIP=ON \
+        -DGGML_VULKAN=OFF \
         -DGGML_METAL=OFF \
         -DGGML_RPC=ON \
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DBUILD_SHARED_LIBS=OFF \
         -DLLAMA_OPENSSL=OFF \
         -DAMDGPU_TARGETS="$ROCM_ARCH"
+else
+    cmake -B "$BUILD_DIR" -S "$LLAMA_DIR" \
+        -DGGML_CUDA=OFF \
+        -DGGML_HIP=OFF \
+        -DGGML_VULKAN=ON \
+        -DGGML_METAL=OFF \
+        -DGGML_RPC=ON \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DLLAMA_OPENSSL=OFF
 fi
 
 cmake --build "$BUILD_DIR" --config Release -j"$(nproc)"

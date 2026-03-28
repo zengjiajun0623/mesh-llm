@@ -16,7 +16,7 @@
 just build
 ```
 
-On macOS, this clones/updates the llama.cpp fork if needed, builds with `-DGGML_METAL=ON -DGGML_RPC=ON -DBUILD_SHARED_LIBS=OFF -DLLAMA_OPENSSL=OFF`, and builds the Rust mesh-llm binary. Linux release workflows build CPU, CUDA, and ROCm variants separately.
+On macOS, this clones/updates the llama.cpp fork if needed, builds with `-DGGML_METAL=ON -DGGML_RPC=ON -DBUILD_SHARED_LIBS=OFF -DLLAMA_OPENSSL=OFF`, and builds the Rust mesh-llm binary. Linux release workflows build CPU, CUDA, ROCm, and Vulkan variants separately.
 
 ### 2. Verify no homebrew dependencies
 
@@ -60,10 +60,12 @@ git push origin main --tags
 
 Pushing a `v*` tag triggers `.github/workflows/release.yml`, which:
 
-- builds release bundles on macOS, Linux CPU, and Linux CUDA
+- builds release bundles on macOS, Linux CPU, Linux CUDA, Linux ROCm, and Linux Vulkan
 - uploads versioned assets such as `mesh-llm-v0.X.0-aarch64-apple-darwin.tar.gz`
 - uploads stable `latest` assets such as `mesh-llm-x86_64-unknown-linux-gnu.tar.gz`
 - uploads CUDA-specific Linux assets such as `mesh-llm-x86_64-unknown-linux-gnu-cuda.tar.gz`
+- uploads ROCm-specific Linux assets such as `mesh-llm-x86_64-unknown-linux-gnu-rocm.tar.gz`
+- uploads Vulkan-specific Linux assets such as `mesh-llm-x86_64-unknown-linux-gnu-vulkan.tar.gz`
 - keeps the legacy macOS `mesh-bundle.tar.gz` asset for the README install one-liner
 - creates the GitHub release automatically with generated notes
 
@@ -75,12 +77,15 @@ After the workflow finishes, verify:
 - `mesh-llm-aarch64-apple-darwin.tar.gz` exists
 - `mesh-llm-x86_64-unknown-linux-gnu.tar.gz` exists
 - `mesh-llm-x86_64-unknown-linux-gnu-cuda.tar.gz` exists
+- `mesh-llm-x86_64-unknown-linux-gnu-rocm.tar.gz` exists
+- `mesh-llm-x86_64-unknown-linux-gnu-vulkan.tar.gz` exists
 
 ## Notes
 
 - The unversioned asset name `mesh-bundle.tar.gz` is still required for the README's macOS install one-liner.
 - The default Linux release bundle is a generic CPU build.
 - The CUDA Linux release bundle is built in CI with an explicit multi-arch `CMAKE_CUDA_ARCHITECTURES` list and is not runtime-tested during the workflow.
+- The ROCm and Vulkan Linux release bundles are compile-tested in CI, but not runtime-tested against real GPUs during the workflow.
 - `codesign` and `xattr` may be needed on the receiving machine if macOS Gatekeeper blocks unsigned binaries:
   ```bash
   codesign -s - /usr/local/bin/mesh-llm /usr/local/bin/rpc-server /usr/local/bin/llama-server

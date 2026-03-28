@@ -7,13 +7,14 @@ ui_dir := mesh_dir / "ui"
 models_dir := env("HOME") / ".models"
 model := models_dir / "GLM-4.7-Flash-Q4_K_M.gguf"
 
-# Build for the current platform (macOS→Metal, Linux→CUDA/ROCm auto-detected)
+# Build for the current platform (macOS→Metal, Linux→CUDA/ROCm/Vulkan auto-detected)
 [macos]
 build: build-mac
 
 # Linux overrides:
 #   just build backend=cuda cuda_arch='120;86'
 #   just build backend=rocm rocm_arch='gfx942;gfx90a'
+#   just build backend=vulkan
 [linux]
 build backend="" cuda_arch="" rocm_arch="":
     @scripts/build-linux.sh --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
@@ -49,7 +50,7 @@ build-mac:
         echo "Mesh binary: target/release/mesh-llm"
     fi
 
-# Build on Linux with CUDA or ROCm — delegates to scripts/build-linux.sh
+# Build on Linux with CUDA, ROCm, or Vulkan — delegates to scripts/build-linux.sh
 build-linux backend="" cuda_arch="" rocm_arch="":
     @scripts/build-linux.sh --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
 
@@ -66,6 +67,10 @@ release-build-cuda cuda_arch="75;80;86;89;90;120":
 # Build a Linux AMD ROCm release artifact with an explicit architecture list.
 release-build-amd amd_arch="gfx90a;gfx942;gfx1100;gfx1101;gfx1102;gfx1200;gfx1201":
     @scripts/build-linux-amd.sh "{{ amd_arch }}"
+
+# Build a Linux Vulkan release artifact.
+release-build-vulkan:
+    @scripts/build-linux.sh --backend vulkan
 
 # Build a Linux AMD ROCm release artifact inside Docker.
 release-rocm-docker amd_arch="" image="rocm/dev-ubuntu-24.04:7.0-complete" platform="":
@@ -201,6 +206,10 @@ release-bundle-cuda version output="dist":
 # Create Linux AMD ROCm release archive(s).
 release-bundle-amd version output="dist":
     MESH_RELEASE_FLAVOR=rocm scripts/package-release.sh "{{ version }}" "{{ output }}"
+
+# Create Linux Vulkan release archive(s).
+release-bundle-vulkan version output="dist":
+    MESH_RELEASE_FLAVOR=vulkan scripts/package-release.sh "{{ version }}" "{{ output }}"
 
 # Run the UI with Vite HMR and proxy /api to mesh-llm (default: http://127.0.0.1:3131)
 ui-dev api="http://127.0.0.1:3131" port="5173":

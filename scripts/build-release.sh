@@ -55,7 +55,9 @@ case "$os_name" in
     Linux)
         cmake_flags+=(
             -DGGML_CUDA=OFF
+            -DGGML_HIP=OFF
             -DGGML_METAL=OFF
+            -DGGML_VULKAN=OFF
         )
         ;;
     *)

@@ -22,10 +22,18 @@ curl -fsSL https://github.com/michaelneale/mesh-llm/releases/latest/download/mes
 
 The default Linux release bundle is a generic CPU build.
 
-For NVIDIA CUDA, a separate prebuilt release asset is published:
+For GPU-specific Linux builds, separate prebuilt release assets are published:
 
 ```bash
 curl -fsSL https://github.com/michaelneale/mesh-llm/releases/latest/download/mesh-llm-x86_64-unknown-linux-gnu-cuda.tar.gz | tar xz && mkdir -p ~/.local/bin && mv mesh-bundle/* ~/.local/bin/
+```
+
+```bash
+curl -fsSL https://github.com/michaelneale/mesh-llm/releases/latest/download/mesh-llm-x86_64-unknown-linux-gnu-rocm.tar.gz | tar xz && mkdir -p ~/.local/bin && mv mesh-bundle/* ~/.local/bin/
+```
+
+```bash
+curl -fsSL https://github.com/michaelneale/mesh-llm/releases/latest/download/mesh-llm-x86_64-unknown-linux-gnu-vulkan.tar.gz | tar xz && mkdir -p ~/.local/bin && mv mesh-bundle/* ~/.local/bin/
 ```
 
 If you want a local GPU build from source instead:
@@ -36,7 +44,7 @@ cd mesh-llm
 just build
 ```
 
-Requires: `just`, `cmake`, Rust toolchain, Node.js + npm. NVIDIA GPU builds need `nvcc` (CUDA toolkit). AMD GPU builds need ROCm/HIP. CPU-only and Jetson/Tegra also work. For source builds, `just build` auto-detects CUDA vs ROCm on Linux, or you can force `backend=rocm`. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+Requires: `just`, `cmake`, Rust toolchain, Node.js + npm. NVIDIA GPU builds need `nvcc` (CUDA toolkit). AMD GPU builds need ROCm/HIP. Vulkan GPU builds need the Vulkan development files plus `glslc`. CPU-only and Jetson/Tegra also work. For source builds, `just build` auto-detects CUDA vs ROCm vs Vulkan on Linux, or you can force `backend=rocm` or `backend=vulkan`. See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## Run
 Once installed, you can run:

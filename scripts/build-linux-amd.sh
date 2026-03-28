@@ -54,6 +54,7 @@ HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -R)" \
 cmake -B "$BUILD_DIR" -S "$LLAMA_DIR" \
     -DGGML_HIP=ON \
     -DGGML_CUDA=OFF \
+    -DGGML_VULKAN=OFF \
     -DGGML_METAL=OFF \
     -DGGML_RPC=ON \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
