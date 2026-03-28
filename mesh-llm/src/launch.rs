@@ -23,12 +23,35 @@ pub async fn start_rpc_server(
         rpc_server.display()
     );
 
+    let device = device.map(|s| s.to_string()).unwrap_or_else(detect_device);
+
+    // Retry up to 3 times — the port we pick can be stolen between
+    // find_free_port() and the rpc-server bind() call (TOCTOU race).
+    let mut last_err = String::new();
+    for attempt in 0..3 {
+        match try_start_rpc_server(&rpc_server, &device, gguf_path, attempt).await {
+            Ok(port) => return Ok(port),
+            Err(e) => {
+                last_err = format!("{e:#}");
+                tracing::warn!("rpc-server attempt {}: {last_err}", attempt + 1);
+            }
+        }
+    }
+
+    anyhow::bail!("rpc-server failed after 3 attempts: {last_err}");
+}
+
+/// Single attempt to start rpc-server on an ephemeral port.
+async fn try_start_rpc_server(
+    rpc_server: &Path,
+    device: &str,
+    gguf_path: Option<&Path>,
+    attempt: usize,
+) -> Result<u16> {
     // Find a free port
     let port = find_free_port().await?;
 
-    let device = device.map(|s| s.to_string()).unwrap_or_else(detect_device);
-
-    tracing::info!("Starting rpc-server on :{port} (device: {device})");
+    tracing::info!("Starting rpc-server on :{port} (device: {device}, attempt {attempt})");
 
     let rpc_log = format!("/tmp/mesh-llm-rpc-{port}.log");
     let rpc_log_file = std::fs::File::create(&rpc_log)
@@ -37,7 +60,7 @@ pub async fn start_rpc_server(
 
     let mut args = vec![
         "-d".to_string(),
-        device.clone(),
+        device.to_string(),
         "-p".to_string(),
         port.to_string(),
     ];
@@ -50,15 +73,23 @@ pub async fn start_rpc_server(
         );
     }
 
-    let mut child = Command::new(&rpc_server)
+    let mut child = Command::new(rpc_server)
         .args(&args)
         .stdout(std::process::Stdio::from(rpc_log_file))
         .stderr(std::process::Stdio::from(rpc_log_file2))
         .spawn()
         .with_context(|| format!("Failed to start rpc-server at {}", rpc_server.display()))?;
 
-    // Wait for it to be listening
-    for _ in 0..30 {
+    // Wait for it to be listening (up to 60s — CUDA init can be slow on some Linux systems)
+    for i in 0..120 {
+        // Check if rpc-server already exited (crashed / port conflict)
+        if let Some(status) = child.try_wait()? {
+            let log_tail = read_log_tail(&rpc_log, 20);
+            anyhow::bail!(
+                "rpc-server exited immediately with {status}\n\
+                 Log ({rpc_log}):\n{log_tail}"
+            );
+        }
         if is_port_open(port).await {
             // Detach — let it run in the background
             tokio::spawn(async move {
@@ -66,10 +97,20 @@ pub async fn start_rpc_server(
             });
             return Ok(port);
         }
+        if i > 0 && i % 20 == 0 {
+            tracing::info!(
+                "Still waiting for rpc-server to start... ({:.0}s)",
+                i as f64 * 0.5
+            );
+        }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 
-    anyhow::bail!("rpc-server failed to start on port {port} within 15s");
+    let log_tail = read_log_tail(&rpc_log, 20);
+    anyhow::bail!(
+        "rpc-server failed to start on port {port} within 60s\n\
+         Log ({rpc_log}):\n{log_tail}"
+    );
 }
 
 /// Kill orphan rpc-server processes from previous mesh-llm runs.
@@ -446,3 +487,142 @@ async fn reqwest_health_check(url: &str) -> bool {
 }
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+/// Read the last N lines of a log file, returning a string.
+/// Returns a placeholder if the file can't be read or is empty.
+fn read_log_tail(path: &str, n: usize) -> String {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => {
+            let lines: Vec<&str> = contents.lines().collect();
+            if lines.is_empty() {
+                "(empty log)".to_string()
+            } else {
+                let start = lines.len().saturating_sub(n);
+                lines[start..].join("\n")
+            }
+        }
+        Err(e) => format!("(could not read log: {e})"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_find_free_port_returns_valid_port() {
+        let port = find_free_port().await.unwrap();
+        assert!(port > 0);
+        // Port should be in the ephemeral range
+        assert!(port >= 1024);
+    }
+
+    #[tokio::test]
+    async fn test_find_free_port_returns_different_ports() {
+        let p1 = find_free_port().await.unwrap();
+        let p2 = find_free_port().await.unwrap();
+        // Not guaranteed but overwhelmingly likely with ephemeral ports
+        assert_ne!(p1, p2);
+    }
+
+    #[tokio::test]
+    async fn test_is_port_open_on_unused_port() {
+        let port = find_free_port().await.unwrap();
+        // Nobody is listening — should be false
+        assert!(!is_port_open(port).await);
+    }
+
+    #[tokio::test]
+    async fn test_is_port_open_on_listening_port() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(is_port_open(port).await);
+        drop(listener);
+    }
+
+    #[test]
+    fn test_read_log_tail_missing_file() {
+        let result = read_log_tail("/tmp/mesh-llm-test-nonexistent-log-file.log", 5);
+        assert!(result.contains("could not read log"));
+    }
+
+    #[test]
+    fn test_read_log_tail_empty_file() {
+        let path = "/tmp/mesh-llm-test-empty.log";
+        std::fs::write(path, "").unwrap();
+        let result = read_log_tail(path, 5);
+        assert_eq!(result, "(empty log)");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_read_log_tail_fewer_lines_than_n() {
+        let path = "/tmp/mesh-llm-test-short.log";
+        std::fs::write(path, "line1\nline2\n").unwrap();
+        let result = read_log_tail(path, 10);
+        assert_eq!(result, "line1\nline2");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_read_log_tail_truncates_to_n() {
+        let path = "/tmp/mesh-llm-test-long.log";
+        let lines: Vec<String> = (1..=20).map(|i| format!("line{i}")).collect();
+        std::fs::write(path, lines.join("\n")).unwrap();
+        let result = read_log_tail(path, 3);
+        assert_eq!(result, "line18\nline19\nline20");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn test_detect_device_returns_nonempty() {
+        let device = detect_device();
+        assert!(!device.is_empty());
+        // On CI (no GPU) this should be CPU; on macOS it's MTL0
+        if cfg!(target_os = "macos") {
+            assert_eq!(device, "MTL0");
+        }
+        // On Linux CI without GPU it should be CPU
+    }
+
+    /// Test that try_start_rpc_server detects an immediately-crashing process
+    /// and includes the log output in the error. Uses `false` as a stand-in
+    /// binary that exits with status 1 immediately.
+    #[tokio::test]
+    async fn test_try_start_rpc_server_detects_crash() {
+        // `false` is a standard Unix binary that exits with code 1
+        let false_bin = std::path::PathBuf::from("/usr/bin/false");
+        if !false_bin.exists() {
+            // Skip on systems without /usr/bin/false
+            return;
+        }
+        let result = try_start_rpc_server(&false_bin, "CPU", None, 0).await;
+        assert!(result.is_err());
+        let err = format!("{:#}", result.unwrap_err());
+        assert!(
+            err.contains("exited immediately"),
+            "Expected crash detection, got: {err}"
+        );
+    }
+
+    /// Test that start_rpc_server retries on failure (uses a binary that
+    /// always fails, so all 3 attempts should fail).
+    #[tokio::test]
+    async fn test_start_rpc_server_retries_on_failure() {
+        // Create a temp dir with a "rpc-server" that is actually `false`
+        let tmp = std::env::temp_dir().join("mesh-llm-test-retry");
+        let _ = std::fs::create_dir_all(&tmp);
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("/usr/bin/false", tmp.join("rpc-server")).ok();
+        }
+        let result = start_rpc_server(&tmp, Some("CPU"), None).await;
+        assert!(result.is_err());
+        let err = format!("{:#}", result.unwrap_err());
+        assert!(
+            err.contains("failed after 3 attempts"),
+            "Expected 3 retries, got: {err}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+}
