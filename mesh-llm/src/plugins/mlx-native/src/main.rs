@@ -3717,6 +3717,79 @@ mod tests {
 
     #[cfg(feature = "native-mlx")]
     #[test]
+    #[ignore = "requires a real local Llama MLX model"]
+    fn real_llama_chat_prompt_prefix_shape_smoke() {
+        let path =
+            resolve_or_download_test_model(ModelFamily::Llama).expect("resolve llama test model");
+        let Some(path) = path else {
+            eprintln!("skipping real_llama_chat_prompt_prefix_shape_smoke: no local model configured");
+            return;
+        };
+
+        let mut engine = load_llama_engine(&path).expect("load llama engine");
+
+        let base_messages = vec![
+            ChatMessage {
+                role: "system".into(),
+                content: serde_json::Value::String(
+                    "You are a concise operations assistant. Answer with three short bullet points."
+                        .into(),
+                ),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: serde_json::Value::String(
+                    "Context:\nMesh-LLM is being evaluated for deployment on a small set of Apple Silicon Macs in a lab. The operators care about startup speed, time-to-first-token, generation throughput, and whether the backend can behave consistently across different prompt styles. They also care about whether the backend is easy to package, whether logs are understandable when a node fails to come up, and whether a model family behaves differently between quantized and bf16 checkpoints.\n\nRecent observations:\n- The llama backend is already stable and widely used.\n- The native MLX path now supports streaming, but some families behave inconsistently.\n- Qwen3 bf16 tends to stop very early under greedy decoding.\n- Some 4-bit MLX checkpoints still fail with shape mismatches during generation.\n- A Llama bf16 MLX checkpoint appears to behave normally.\n\nTask: summarize the operational implications of these observations."
+                        .into(),
+                ),
+            },
+        ];
+
+        let extended_messages = vec![
+            ChatMessage {
+                role: "system".into(),
+                content: serde_json::Value::String(
+                    "You are a concise operations assistant. Answer with three short bullet points."
+                        .into(),
+                ),
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: serde_json::Value::String(
+                    "Context:\nMesh-LLM is being evaluated for deployment on a small set of Apple Silicon Macs in a lab. The operators care about startup speed, time-to-first-token, generation throughput, and whether the backend can behave consistently across different prompt styles. They also care about whether the backend is easy to package, whether logs are understandable when a node fails to come up, and whether a model family behaves differently between quantized and bf16 checkpoints.\n\nRecent observations:\n- The llama backend is already stable and widely used.\n- The native MLX path now supports streaming, but some families behave inconsistently.\n- Qwen3 bf16 tends to stop very early under greedy decoding.\n- Some 4-bit MLX checkpoints still fail with shape mismatches during generation.\n- A Llama bf16 MLX checkpoint appears to behave normally.\n\nTask: summarize the operational implications of these observations. Then add one final bullet naming the highest-priority next experiment."
+                        .into(),
+                ),
+            },
+        ];
+
+        let base_ids = render_chat_prompt(
+            &mut engine.tokenizer,
+            engine.chat_template.clone(),
+            &base_messages,
+        )
+        .expect("render llama chat base prompt");
+        let extended_ids = render_chat_prompt(
+            &mut engine.tokenizer,
+            engine.chat_template.clone(),
+            &extended_messages,
+        )
+        .expect("render llama chat extended prompt");
+
+        let shared_prefix = common_prefix_len(&base_ids, &extended_ids);
+        eprintln!(
+            "llama chat prefix shape: base_tokens={} extended_tokens={} shared_prefix={}",
+            base_ids.len(),
+            extended_ids.len(),
+            shared_prefix
+        );
+        assert!(
+            shared_prefix > 0,
+            "benchmark-style chat prompts should share some token prefix"
+        );
+    }
+
+    #[cfg(feature = "native-mlx")]
+    #[test]
     #[ignore = "requires a real local Qwen3 MLX model"]
     fn real_qwen3_exact_repeat_cache_smoke() {
         let path =
