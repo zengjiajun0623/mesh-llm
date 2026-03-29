@@ -2334,7 +2334,107 @@ fn get_or_create_qwen2_prefill(
     prompt_tokens: &Array,
     prompt_cache: &mut Option<PromptCacheEntry>,
 ) -> Result<(Array, Vec<Option<ConcatKeyValueCache>>, usize)> {
-    get_or_create_llama_prefill(model, prompt_ids, prompt_tokens, prompt_cache)
+    if let Some(entry) = prompt_cache.as_ref() {
+        let reused_prompt_tokens = common_prefix_len(&entry.prompt_ids, prompt_ids);
+        if entry.prompt_ids == prompt_ids {
+            return Ok((
+                entry.prefill_logits.clone(),
+                entry.prefill_cache.clone(),
+                entry.prompt_ids.len(),
+            ));
+        }
+
+        if reused_prompt_tokens > 0 {
+            let trimmed_cache = entry
+                .prefill_cache
+                .iter()
+                .map(|entry| {
+                    entry
+                        .as_ref()
+                        .map(|cache| cache.trimmed_to(reused_prompt_tokens as i32))
+                        .transpose()
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let (prefill_logits, prefill_cache) = extend_qwen2_prefill_one_token_at_a_time(
+                model,
+                prompt_ids,
+                reused_prompt_tokens,
+                trimmed_cache,
+            )?;
+            *prompt_cache = Some(PromptCacheEntry {
+                prompt_ids: prompt_ids.to_vec(),
+                prefill_cache: prefill_cache.clone(),
+                prefill_logits: prefill_logits.clone(),
+            });
+            return Ok((prefill_logits, prefill_cache, reused_prompt_tokens));
+        }
+
+        if reused_prompt_tokens == entry.prompt_ids.len() && reused_prompt_tokens < prompt_ids.len()
+        {
+            let (prefill_logits, prefill_cache) = extend_qwen2_prefill_one_token_at_a_time(
+                model,
+                prompt_ids,
+                reused_prompt_tokens,
+                entry.prefill_cache.clone(),
+            )?;
+            *prompt_cache = Some(PromptCacheEntry {
+                prompt_ids: prompt_ids.to_vec(),
+                prefill_cache: prefill_cache.clone(),
+                prefill_logits: prefill_logits.clone(),
+            });
+            return Ok((prefill_logits, prefill_cache, reused_prompt_tokens));
+        }
+    }
+
+    let (prefill_logits, prefill_cache) = prefill_qwen2_prompt(model, prompt_tokens)?;
+    *prompt_cache = Some(PromptCacheEntry {
+        prompt_ids: prompt_ids.to_vec(),
+        prefill_cache: prefill_cache.clone(),
+        prefill_logits: prefill_logits.clone(),
+    });
+    Ok((prefill_logits, prefill_cache, 0))
+}
+
+#[cfg(feature = "native-mlx")]
+fn prefill_qwen2_prompt(
+    model: &mut qwen2::Model,
+    prompt_tokens: &Array,
+) -> Result<(Array, Vec<Option<ConcatKeyValueCache>>)> {
+    let mut cache = Vec::<Option<ConcatKeyValueCache>>::new();
+    let input = qwen2::ModelInput {
+        inputs: prompt_tokens,
+        mask: None,
+        cache: &mut cache,
+    };
+    let logits = model.forward(input)?;
+    let logits = logits.index((.., -1, ..));
+    eval([&logits])?;
+    Ok((logits, cache))
+}
+
+#[cfg(feature = "native-mlx")]
+fn extend_qwen2_prefill_one_token_at_a_time(
+    model: &mut qwen2::Model,
+    prompt_ids: &[u32],
+    start_at: usize,
+    mut cache: Vec<Option<ConcatKeyValueCache>>,
+) -> Result<(Array, Vec<Option<ConcatKeyValueCache>>)> {
+    let mut last_logits = None;
+    for token_id in &prompt_ids[start_at..] {
+        let chunk_tokens = build_prompt_array(&[*token_id])?;
+        let input = qwen2::ModelInput {
+            inputs: &chunk_tokens,
+            mask: None,
+            cache: &mut cache,
+        };
+        let logits = model.forward(input)?;
+        let logits = logits.index((.., -1, ..));
+        eval([&logits])?;
+        last_logits = Some(logits.clone());
+    }
+    let prefill_logits =
+        last_logits.ok_or_else(|| anyhow!("qwen2 prompt must contain at least one token"))?;
+    Ok((prefill_logits, cache))
 }
 
 #[cfg(feature = "native-mlx")]
@@ -2511,16 +2611,46 @@ fn generate_qwen2_tokens(
     temperature: f32,
     prompt_cache: &mut Option<PromptCacheEntry>,
 ) -> Result<(String, &'static str, usize)> {
-    generate_llama_tokens(
-        model,
-        tokenizer,
-        stop_ids,
-        prompt_ids,
-        prompt_tokens,
-        max_tokens,
-        temperature,
-        prompt_cache,
-    )
+    let decode_started = Instant::now();
+    let mut output_ids = Vec::new();
+    let mut finish_reason = "length";
+    let (prefill_logits, mut cache, reused_prompt_tokens) =
+        get_or_create_qwen2_prefill(model, prompt_ids, prompt_tokens, prompt_cache)?;
+    set_profile_reused_prompt_tokens(reused_prompt_tokens);
+    let mut y = qwen2::sample(&prefill_logits, temperature)?;
+    let first_token_ms = Some(duration_ms(decode_started.elapsed()));
+    let mut token_id = y.item::<u32>();
+    if stop_ids.contains(&token_id) {
+        finish_reason = "stop";
+    } else {
+        output_ids.push(token_id);
+    }
+
+    while output_ids.len() < max_tokens && finish_reason != "stop" {
+        let inputs = y.index((.., NewAxis));
+        let input = qwen2::ModelInput {
+            inputs: &inputs,
+            mask: None,
+            cache: &mut cache,
+        };
+        let logits = model.forward(input)?;
+        y = qwen2::sample(&logits.index((.., -1, ..)), temperature)?;
+        token_id = y.item::<u32>();
+        if stop_ids.contains(&token_id) {
+            finish_reason = "stop";
+            break;
+        }
+        output_ids.push(token_id);
+    }
+
+    let text = tokenizer
+        .decode(&output_ids, true)
+        .map_err(|err| anyhow!(err.to_string()))?;
+    set_profile_decode_timings(DecodeTimings {
+        first_token_ms,
+        decode_ms: duration_ms(decode_started.elapsed()),
+    });
+    Ok((text, finish_reason, output_ids.len()))
 }
 
 #[cfg(feature = "native-mlx")]
@@ -2604,17 +2734,51 @@ fn stream_qwen2_tokens(
     on_chunk: &mut dyn FnMut(String) -> Result<(), ApiError>,
     prompt_cache: &mut Option<PromptCacheEntry>,
 ) -> Result<(&'static str, usize)> {
-    stream_llama_tokens(
-        model,
-        tokenizer,
-        stop_ids,
-        prompt_ids,
-        prompt_tokens,
-        max_tokens,
-        temperature,
-        on_chunk,
-        prompt_cache,
-    )
+    let decode_started = Instant::now();
+    let mut completion_tokens = 0usize;
+    let mut finish_reason = "length";
+    let (prefill_logits, mut cache, reused_prompt_tokens) =
+        get_or_create_qwen2_prefill(model, prompt_ids, prompt_tokens, prompt_cache)?;
+    set_profile_reused_prompt_tokens(reused_prompt_tokens);
+    let mut y = qwen2::sample(&prefill_logits, temperature)?;
+    let first_token_ms = Some(duration_ms(decode_started.elapsed()));
+    let mut token_id = y.item::<u32>();
+    if !stop_ids.contains(&token_id) {
+        completion_tokens += 1;
+        let chunk = decode_token_chunk(tokenizer, token_id)?;
+        if !chunk.is_empty() {
+            on_chunk(chunk).map_err(|err| anyhow!(err.message))?;
+        }
+    } else {
+        finish_reason = "stop";
+    }
+
+    while completion_tokens < max_tokens && finish_reason != "stop" {
+        let inputs = y.index((.., NewAxis));
+        let input = qwen2::ModelInput {
+            inputs: &inputs,
+            mask: None,
+            cache: &mut cache,
+        };
+        let logits = model.forward(input)?;
+        y = qwen2::sample(&logits.index((.., -1, ..)), temperature)?;
+        token_id = y.item::<u32>();
+        if stop_ids.contains(&token_id) {
+            finish_reason = "stop";
+            break;
+        }
+        completion_tokens += 1;
+        let chunk = decode_token_chunk(tokenizer, token_id)?;
+        if !chunk.is_empty() {
+            on_chunk(chunk).map_err(|err| anyhow!(err.message))?;
+        }
+    }
+
+    set_profile_decode_timings(DecodeTimings {
+        first_token_ms,
+        decode_ms: duration_ms(decode_started.elapsed()),
+    });
+    Ok((finish_reason, completion_tokens))
 }
 
 #[cfg(feature = "native-mlx")]
