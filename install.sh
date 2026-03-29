@@ -423,10 +423,10 @@ systemd_quote_token() {
 
 local_template_path() {
     local rel_path="$1"
-    local source_path="${BASH_SOURCE[0]}"
+    local source_path="${BASH_SOURCE[0]-}"
     local script_dir
 
-    if [[ "$source_path" != */* ]]; then
+    if [[ -z "$source_path" || "$source_path" != */* ]]; then
         return 1
     fi
 
@@ -721,6 +721,6 @@ main() {
     fi
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+if [[ "${BASH_SOURCE[0]-}" == "$0" ]]; then
     main "$@"
 fi
