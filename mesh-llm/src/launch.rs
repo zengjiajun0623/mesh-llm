@@ -58,10 +58,15 @@ struct ResolvedBinary {
     flavor: Option<BinaryFlavor>,
 }
 
-fn platform_bin_name(name: &str) -> String {
+pub(crate) fn platform_bin_name(name: &str) -> String {
     #[cfg(windows)]
     {
-        if name.to_ascii_lowercase().ends_with(".exe") {
+        if Path::new(name)
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("exe"))
+            .unwrap_or(false)
+        {
             name.to_string()
         } else {
             format!("{name}.exe")
@@ -886,5 +891,11 @@ No devices found
             super::infer_binary_flavor("rpc-server", Path::new("rpc-server")),
             None
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn platform_bin_name_preserves_existing_exe_suffix_case_insensitively() {
+        assert_eq!(super::platform_bin_name("rpc-server.EXE"), "rpc-server.EXE");
     }
 }

@@ -233,28 +233,12 @@ fn release_has_any_platform_asset(assets: &[String], os: &str, arch: &str) -> bo
     })
 }
 
-fn platform_bin_name(name: &str) -> String {
-    #[cfg(windows)]
-    {
-        if name.to_ascii_lowercase().ends_with(".exe") {
-            name.to_string()
-        } else {
-            format!("{name}.exe")
-        }
-    }
-
-    #[cfg(not(windows))]
-    {
-        name.to_string()
-    }
-}
-
 fn mesh_binary_name() -> String {
-    platform_bin_name("mesh-llm")
+    launch::platform_bin_name("mesh-llm")
 }
 
 fn bundled_server_flavor_name(name: &str, flavor: launch::BinaryFlavor) -> String {
-    platform_bin_name(&format!("{name}-{}", flavor.suffix()))
+    launch::platform_bin_name(&format!("{name}-{}", flavor.suffix()))
 }
 
 fn has_bundled_server_pair(dir: &Path, flavor: launch::BinaryFlavor) -> bool {
@@ -456,13 +440,13 @@ fn extract_zip_archive(archive: &Path, extracted: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
+mod zip_tests {
     use super::*;
     use std::fs;
     use std::io::Write;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use zip::write::FileOptions;
+    use zip::write::SimpleFileOptions;
     use zip::CompressionMethod;
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {
@@ -488,7 +472,7 @@ mod tests {
         let file = std::fs::File::create(&archive_path)
             .with_context(|| format!("Failed to create test archive {}", archive_path.display()))?;
         let mut writer = zip::ZipWriter::new(file);
-        let options = FileOptions::default().compression_method(CompressionMethod::Stored);
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
 
         // Top-level directory.
         writer.add_directory("bundle-1.0.0/", options)?;

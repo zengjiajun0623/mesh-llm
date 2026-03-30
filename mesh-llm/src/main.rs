@@ -2589,7 +2589,7 @@ async fn run_discover(
 /// Drop a model from the mesh by sending a control request to the running instance.
 fn run_stop() -> Result<()> {
     let mut killed = 0u32;
-    for name in &["mesh-llm", "llama-server", "rpc-server"] {
+    for name in &["llama-server", "rpc-server", "mesh-llm"] {
         if crate::launch::terminate_process_by_name(name) {
             eprintln!("🧹 Stopped {name}");
             killed += 1;
