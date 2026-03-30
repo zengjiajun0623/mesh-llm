@@ -80,3 +80,51 @@ Results go to `evals/results/<provider>/<scenario>/`:
 | Qwen2.5-Coder-7B | ✅ works | ✅ great | ⚠️ ok | ~85 tok/s |
 | Hermes-7B | ❌ broken | ⚠️ basic | ✅ fast | ~87 tok/s |
 | Qwen3-30B-A3B | ❌ thinking format | ✅ good | ❌ empty content | ~22 tok/s |
+
+## Backend benchmark
+
+`evals/backend-benchmark.py` benchmarks local OpenAI-compatible backends serially.
+
+It can compare:
+
+- mesh-managed `llama` via a GGUF model path
+- mesh-managed `mlx` via an MLX model directory
+- standalone `vllm`
+- any custom backend launch command that exposes `/v1/models` and `/v1/chat/completions`
+
+It measures:
+
+- startup time until `/v1/models` is ready
+- time to first token
+- end-to-end request time
+- usage-based completion throughput when reported
+- aggregate throughput across one or more concurrency levels
+
+### Simple usage
+
+```bash
+python3 evals/backend-benchmark.py \
+  --llama-model ~/.models/Qwen2.5-0.5B-Instruct-F16.gguf \
+  --mlx-model ~/.cache/huggingface/hub/models--mlx-community--Qwen2.5-0.5B-Instruct-bf16/snapshots/<snapshot> \
+  --vllm-model ~/.models/hf/Qwen2.5-0.5B-Instruct \
+  --concurrency 1,4,8 \
+  --iterations 3
+```
+
+### Arbitrary backend combinations
+
+Use a JSON spec file when you want more than the built-in `llama` / `mlx` / `vllm` helpers:
+
+```bash
+python3 evals/backend-benchmark.py \
+  --spec-file evals/backend-benchmark.example.json \
+  --concurrency 1,4,8 \
+  --iterations 3
+```
+
+The example file shows how to mix mesh-managed backends with standalone commands.
+Every backend entry gets its own local port automatically unless you pin one explicitly.
+
+By default the script rejects backend sets whose served model IDs do not normalize to
+the same base identity. Pass `--allow-mismatched-models` if you want an intentionally
+mixed comparison.

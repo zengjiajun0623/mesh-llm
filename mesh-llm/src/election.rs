@@ -5,7 +5,7 @@
 //! Every mesh change: kill llama-server, re-elect, winner starts fresh.
 //! mesh-llm owns :api_port and proxies to the right host by model name.
 
-use crate::{download, launch, mesh, moe, tunnel};
+use crate::{backend, download, launch, mesh, moe, tunnel};
 use mesh::NodeRole;
 use std::collections::HashMap;
 use std::path::Path;
@@ -261,6 +261,7 @@ pub async fn election_loop(
     let model_bytes = total_model_bytes(&model);
     let my_vram = node.vram_bytes();
     let model_fits_locally = my_vram >= (model_bytes as f64 * 1.1) as u64;
+    let backend_kind = backend::detect_backend(&model);
 
     // Check if this is a MoE model with pre-computed expert routing
     let moe_config = lookup_moe_config(&model_name, &model);
@@ -315,11 +316,39 @@ pub async fn election_loop(
             .cloned()
             .collect();
 
+        if !backend_kind.capabilities().supports_rpc_split {
+            if force_split {
+                eprintln!(
+                    "⚠ [{}] backend '{}' ignores --split (solo-only for now)",
+                    model_name,
+                    backend_kind.as_str()
+                );
+            }
+            if !model_fits_locally {
+                eprintln!(
+                    "⏳ [{}] backend '{}' requires local fit ({:.1}GB model, {:.1}GB VRAM)",
+                    model_name,
+                    backend_kind.as_str(),
+                    model_bytes as f64 / 1e9,
+                    my_vram as f64 / 1e9
+                );
+                update_targets(&node, &model_name, InferenceTarget::None, &target_tx).await;
+                on_change(false, false);
+                last_worker_set.clear();
+                if peer_rx.changed().await.is_err() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                continue;
+            }
+        }
+
         // Splitting decision: only split when forced OR when the model
         // genuinely doesn't fit on this node alone. If it fits, every
         // node serving this model runs its own independent llama-server
         // (no election needed — everyone is a host).
-        let need_split = force_split || !model_fits_locally;
+        let need_split =
+            backend_kind.capabilities().supports_rpc_split && (force_split || !model_fits_locally);
 
         let i_am_host = if need_split {
             // Distributed mode: elect one host from the model group
@@ -393,7 +422,11 @@ pub async fn election_loop(
                         std::future::pending::<()>().await;
                     }
                 } => {
-                    eprintln!("🔄 [{}] llama-server died — restarting...", model_name);
+                    eprintln!(
+                        "🔄 [{}] {} died — restarting...",
+                        model_name,
+                        backend_kind.process_label()
+                    );
                     llama_death_rx = None;
                     currently_host = false;
                     update_targets(&node, &model_name, InferenceTarget::None, &target_tx).await;
@@ -404,9 +437,9 @@ pub async fn election_loop(
             }
         }
 
-        // Something changed — kill llama-server if we were running it
+        // Something changed — kill the inference server if we were running it
         if currently_host {
-            launch::kill_llama_server().await;
+            launch::kill_server_processes(backend_kind).await;
             tunnel_mgr.set_http_port(0);
             node.set_role(NodeRole::Worker).await;
             update_targets(&node, &model_name, InferenceTarget::None, &target_tx).await;
@@ -461,7 +494,7 @@ pub async fn election_loop(
 
             // In solo mode, pass empty model_peers so start_llama won't use any workers
             let peers_for_launch = if need_split { &model_peers[..] } else { &[] };
-            let (llama_port, death_rx) = match start_llama(
+            let (llama_port, death_rx) = match start_model_server(
                 &node,
                 &tunnel_mgr,
                 rpc_port,
@@ -506,8 +539,9 @@ pub async fn election_loop(
             llama_death_rx = Some(death_rx);
             on_change(true, true);
             eprintln!(
-                "✅ [{}] llama-server ready on internal port {llama_port}",
-                model_name
+                "✅ [{}] {} ready on internal port {llama_port}",
+                model_name,
+                backend_kind.process_label()
             );
         } else {
             // We're a worker in split mode. Find who the host is.
@@ -556,7 +590,11 @@ pub async fn election_loop(
                     std::future::pending::<()>().await;
                 }
             } => {
-                eprintln!("🔄 [{}] llama-server died — restarting...", model_name);
+                eprintln!(
+                    "🔄 [{}] {} died — restarting...",
+                    model_name,
+                    backend_kind.process_label()
+                );
                 llama_death_rx = None;
                 currently_host = false;
                 update_targets(&node, &model_name, InferenceTarget::None, &target_tx).await;
@@ -908,9 +946,9 @@ async fn update_targets(
     });
 }
 
-/// Start llama-server with --rpc pointing at model-group nodes (self + workers).
+/// Start the model server with --rpc pointing at model-group nodes (self + workers).
 /// Returns the ephemeral port and a death notification receiver, or None on failure.
-async fn start_llama(
+async fn start_model_server(
     node: &mesh::Node,
     tunnel_mgr: &tunnel::Manager,
     _my_rpc_port: u16,
@@ -927,6 +965,7 @@ async fn start_llama(
     let my_vram = node.vram_bytes();
     let model_bytes = total_model_bytes(model);
     let min_vram = (model_bytes as f64 * 1.1) as u64;
+    let backend_kind = backend::detect_backend(model);
 
     // Decide whether to split: only if model doesn't fit on host alone, or --split forced
     let need_split = force_split || my_vram < min_vram;
@@ -1097,26 +1136,29 @@ async fn start_llama(
         None
     };
 
-    match launch::start_llama_server(
+    match launch::start_model_server(
         bin_dir,
         binary_flavor,
-        model,
-        llama_port,
-        &rpc_ports,
-        split.as_deref(),
-        draft,
-        draft_max,
-        model_bytes,
-        my_vram,
-        mmproj_path.as_deref(),
-        ctx_size_override,
-        group_vram,
+        launch::ModelLaunchSpec {
+            backend: backend_kind,
+            model,
+            http_port: llama_port,
+            tunnel_ports: &rpc_ports,
+            tensor_split: split.as_deref(),
+            draft,
+            draft_max,
+            model_bytes,
+            my_vram,
+            mmproj: mmproj_path.as_deref(),
+            ctx_size_override,
+            total_group_vram: group_vram,
+        },
     )
     .await
     {
         Ok(death_rx) => Some((llama_port, death_rx)),
         Err(e) => {
-            eprintln!("  Failed to start llama-server: {e}");
+            eprintln!("  Failed to start {}: {e}", backend_kind.process_label());
             None
         }
     }

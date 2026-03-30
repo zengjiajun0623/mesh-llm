@@ -1,11 +1,14 @@
-//! Process management for llama.cpp binaries.
+//! Process management for inference backends.
 //!
-//! Starts rpc-server and optionally llama-server as child processes,
+//! Starts rpc-server and backend inference processes as child processes,
 //! wired up to the mesh tunnel ports.
 
+use crate::backend;
 use anyhow::{Context, Result};
 use clap::ValueEnum;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use tokio::net::TcpListener;
 use tokio::process::Command;
 
@@ -142,7 +145,46 @@ fn resolve_binary_path(
     }
 }
 
-fn temp_log_path(name: &str) -> PathBuf {
+pub struct ModelLaunchSpec<'a> {
+    pub backend: backend::BackendKind,
+    pub model: &'a Path,
+    pub http_port: u16,
+    pub tunnel_ports: &'a [u16],
+    pub tensor_split: Option<&'a str>,
+    pub draft: Option<&'a Path>,
+    pub draft_max: u16,
+    pub model_bytes: u64,
+    pub my_vram: u64,
+    pub mmproj: Option<&'a Path>,
+    pub ctx_size_override: Option<u32>,
+    pub total_group_vram: Option<u64>,
+}
+
+fn mlx_model_overrides() -> &'static Mutex<HashMap<u16, String>> {
+    static OVERRIDES: OnceLock<Mutex<HashMap<u16, String>>> = OnceLock::new();
+    OVERRIDES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn register_mlx_model_override(port: u16, model: &Path) {
+    if let Ok(mut overrides) = mlx_model_overrides().lock() {
+        overrides.insert(port, model.to_string_lossy().to_string());
+    }
+}
+
+fn unregister_mlx_model_override(port: u16) {
+    if let Ok(mut overrides) = mlx_model_overrides().lock() {
+        overrides.remove(&port);
+    }
+}
+
+pub fn mlx_model_override_for_port(port: u16) -> Option<String> {
+    mlx_model_overrides()
+        .lock()
+        .ok()
+        .and_then(|overrides| overrides.get(&port).cloned())
+}
+
+pub(crate) fn temp_log_path(name: &str) -> PathBuf {
     std::env::temp_dir().join(name)
 }
 
@@ -249,6 +291,47 @@ fn command_has_output(command: &str, args: &[&str]) -> bool {
         && String::from_utf8_lossy(&output.stdout)
             .lines()
             .any(|line| !line.trim().is_empty())
+}
+
+pub async fn start_model_server(
+    bin_dir: &Path,
+    binary_flavor: Option<BinaryFlavor>,
+    spec: ModelLaunchSpec<'_>,
+) -> Result<tokio::sync::oneshot::Receiver<()>> {
+    match spec.backend {
+        backend::BackendKind::Llama => {
+            start_llama_server(
+                bin_dir,
+                binary_flavor,
+                spec.model,
+                spec.http_port,
+                spec.tunnel_ports,
+                spec.tensor_split,
+                spec.draft,
+                spec.draft_max,
+                spec.model_bytes,
+                spec.my_vram,
+                spec.mmproj,
+                spec.ctx_size_override,
+                spec.total_group_vram,
+            )
+            .await
+        }
+        backend::BackendKind::Mlx => start_mlx_server(spec).await,
+    }
+}
+
+pub async fn kill_server_processes(kind: backend::BackendKind) {
+    match kind {
+        backend::BackendKind::Llama => kill_llama_server().await,
+        backend::BackendKind::Mlx => kill_mlx_server().await,
+    }
+}
+
+pub async fn kill_all_server_processes() {
+    for kind in backend::BackendKind::ALL {
+        kill_server_processes(kind).await;
+    }
 }
 
 /// Start a local rpc-server and return the port it's listening on.
@@ -375,6 +458,104 @@ pub async fn kill_orphan_rpc_servers() {
     }
 }
 
+#[derive(Clone, Debug)]
+struct ResolvedMlxRuntime {
+    executable: String,
+    prefix_args: Vec<String>,
+}
+
+fn command_on_path(command: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|path| {
+            std::env::split_paths(&path).any(|dir| {
+                let candidate = dir.join(command);
+                candidate.exists() && candidate.is_file()
+            })
+        })
+        .unwrap_or(false)
+}
+
+fn python_has_module(command: &str, module: &str) -> bool {
+    std::process::Command::new(command)
+        .args([
+            "-c",
+            &format!(
+                "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec({module:?}) else 1)"
+            ),
+        ])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn resolve_mlx_runtime() -> Result<ResolvedMlxRuntime> {
+    if let Some(path) = std::env::var_os("MESH_LLM_MLX_SERVER_BIN") {
+        let path = PathBuf::from(path);
+        anyhow::ensure!(
+            path.exists(),
+            "MESH_LLM_MLX_SERVER_BIN points to missing path {}",
+            path.display()
+        );
+        return Ok(ResolvedMlxRuntime {
+            executable: path.to_string_lossy().to_string(),
+            prefix_args: vec![],
+        });
+    }
+
+    if command_on_path("mlx_lm.server") {
+        return Ok(ResolvedMlxRuntime {
+            executable: "mlx_lm.server".to_string(),
+            prefix_args: vec![],
+        });
+    }
+
+    for python in ["python3", "python"] {
+        if command_on_path(python) && python_has_module(python, "mlx_lm.server") {
+            return Ok(ResolvedMlxRuntime {
+                executable: python.to_string(),
+                prefix_args: vec!["-m".to_string(), "mlx_lm.server".to_string()],
+            });
+        }
+    }
+
+    anyhow::bail!(
+        "MLX server runtime not found. Install mlx-lm, pass --mlx-server-bin, or set MESH_LLM_MLX_SERVER_BIN"
+    );
+}
+
+fn validate_mlx_model(model: &Path) -> Result<()> {
+    anyhow::ensure!(model.exists(), "Model not found at {}", model.display());
+    anyhow::ensure!(
+        model.is_dir(),
+        "mlx backend expects a local model directory, got {}",
+        model.display()
+    );
+    anyhow::ensure!(
+        model.join("config.json").exists(),
+        "mlx backend requires config.json in {}",
+        model.display()
+    );
+    anyhow::ensure!(
+        model.join("tokenizer_config.json").exists() || model.join("tokenizer.json").exists(),
+        "mlx backend requires tokenizer metadata in {}",
+        model.display()
+    );
+    anyhow::ensure!(
+        model.join("model.safetensors").exists()
+            || model.join("model.safetensors.index.json").exists(),
+        "mlx backend requires model.safetensors or model.safetensors.index.json in {}",
+        model.display()
+    );
+    Ok(())
+}
+
+async fn kill_mlx_server() {
+    let _ = std::process::Command::new("pkill")
+        .args(["-f", "mlx_lm.server"])
+        .status();
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+}
+
 /// Kill all running llama-server processes.
 pub async fn kill_llama_server() {
     let _ = std::process::Command::new("pkill")
@@ -400,6 +581,96 @@ pub async fn kill_llama_server() {
         .args(["-9", "-f", "llama-server"])
         .status();
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+}
+
+async fn start_mlx_server(spec: ModelLaunchSpec<'_>) -> Result<tokio::sync::oneshot::Receiver<()>> {
+    anyhow::ensure!(
+        spec.tunnel_ports.is_empty(),
+        "mlx backend does not support rpc split workers yet"
+    );
+    anyhow::ensure!(
+        spec.tensor_split.is_none(),
+        "mlx backend does not support tensor split yet"
+    );
+    anyhow::ensure!(
+        spec.draft.is_none(),
+        "mlx backend does not support draft/speculative mode yet"
+    );
+    anyhow::ensure!(
+        spec.mmproj.is_none(),
+        "mlx backend does not support llama.cpp mmproj launch args"
+    );
+    if let Some(ctx_size) = spec.ctx_size_override {
+        tracing::warn!(
+            "Ignoring ctx-size override {} for mlx backend; mlx_lm.server does not expose an equivalent server flag",
+            ctx_size
+        );
+    }
+
+    validate_mlx_model(spec.model)?;
+    let runtime = resolve_mlx_runtime()?;
+    let log_path = temp_log_path("mesh-llm-mlx-server.log");
+    let log_file = std::fs::File::create(&log_path).with_context(|| {
+        format!(
+            "Failed to create mlx server log file {}",
+            log_path.display()
+        )
+    })?;
+    let log_file2 = log_file.try_clone()?;
+
+    let mut args = runtime.prefix_args.clone();
+    args.extend_from_slice(&[
+        "--model".to_string(),
+        spec.model.to_string_lossy().to_string(),
+        "--host".to_string(),
+        "0.0.0.0".to_string(),
+        "--port".to_string(),
+        spec.http_port.to_string(),
+    ]);
+
+    tracing::info!(
+        "Starting mlx_lm.server on :{} with model {}",
+        spec.http_port,
+        spec.model.display()
+    );
+
+    register_mlx_model_override(spec.http_port, spec.model);
+    let mut child = match Command::new(&runtime.executable)
+        .args(&args)
+        .stdout(std::process::Stdio::from(log_file))
+        .stderr(std::process::Stdio::from(log_file2))
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(err) => {
+            unregister_mlx_model_override(spec.http_port);
+            return Err(err).with_context(|| {
+                format!("Failed to start mlx_lm.server via {}", runtime.executable)
+            });
+        }
+    };
+
+    let url = format!("http://localhost:{}/health", spec.http_port);
+    for _ in 0..600 {
+        if reqwest_health_check(&url).await {
+            let (death_tx, death_rx) = tokio::sync::oneshot::channel();
+            let port = spec.http_port;
+            tokio::spawn(async move {
+                let _ = child.wait().await;
+                unregister_mlx_model_override(port);
+                eprintln!("⚠️  mlx_lm.server process exited unexpectedly");
+                let _ = death_tx.send(());
+            });
+            return Ok(death_rx);
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+
+    unregister_mlx_model_override(spec.http_port);
+    anyhow::bail!(
+        "mlx_lm.server failed to become healthy within 600s. See {}",
+        log_path.display()
+    );
 }
 
 /// Start llama-server with the given model, HTTP port, and RPC tunnel ports.

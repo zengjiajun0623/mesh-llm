@@ -1,5 +1,6 @@
 mod api;
 mod autoupdate;
+mod backend;
 mod download;
 mod election;
 mod hardware;
@@ -127,6 +128,10 @@ struct Cli {
     /// Path to rpc-server, llama-server, and llama-moe-split binaries.
     #[arg(long, hide = true)]
     bin_dir: Option<PathBuf>,
+
+    /// Override the MLX server executable used for the mlx backend.
+    #[arg(long, hide = true)]
+    mlx_server_bin: Option<PathBuf>,
 
     /// Override which bundled llama.cpp flavor to use.
     #[arg(long, value_enum)]
@@ -327,6 +332,10 @@ async fn main() -> Result<()> {
 
     let mut cli = Cli::parse();
 
+    if let Some(path) = &cli.mlx_server_bin {
+        std::env::set_var("MESH_LLM_MLX_SERVER_BIN", path);
+    }
+
     if let Some(name) = cli.plugin.clone() {
         return plugin::run_plugin_process(name).await;
     }
@@ -337,9 +346,9 @@ async fn main() -> Result<()> {
         false
     };
 
-    // Clean up orphan processes from previous runs (skip for client — never runs llama-server)
+    // Clean up orphan processes from previous runs (skip for client — never runs inference servers)
     if !cli.client {
-        launch::kill_llama_server().await;
+        launch::kill_all_server_processes().await;
         launch::kill_orphan_rpc_servers().await;
     }
 
@@ -614,11 +623,8 @@ async fn main() -> Result<()> {
     // Strip split GGUF suffix so "MiniMax-M2.5-Q4_K_M-00001-of-00004" → "MiniMax-M2.5-Q4_K_M"
     let requested_model_names: Vec<String> = resolved_models
         .iter()
-        .filter_map(|m| {
-            m.file_stem()
-                .and_then(|s| s.to_str())
-                .map(|s| router::strip_split_suffix_owned(s))
-        })
+        .filter_map(|m| model_path_name(m))
+        .map(|name| router::strip_split_suffix_owned(&name))
         .collect();
 
     let bin_dir = match &cli.bin_dir {
@@ -1384,15 +1390,9 @@ async fn run_auto(
         }
     };
 
-    let model_name = {
-        let stem = model
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        // Strip split GGUF suffix: "MiniMax-M2.5-Q4_K_M-00001-of-00004" → "MiniMax-M2.5-Q4_K_M"
-        router::strip_split_suffix_owned(&stem)
-    };
+    let model_name = model_path_name(&model)
+        .map(|name| router::strip_split_suffix_owned(&name))
+        .unwrap_or_else(|| "unknown".to_string());
 
     // Set model source for gossip (so other joiners can discover it too)
     let model_source = if !cli.model.is_empty() {
@@ -1416,18 +1416,29 @@ async fn run_auto(
         }
     }
 
+    let primary_backend = backend::detect_backend(&model);
+
     // Clean up stale processes from previous runs
     launch::kill_orphan_rpc_servers().await;
 
-    // Start rpc-server
-    let rpc_port = launch::start_rpc_server(
-        &bin_dir,
-        cli.llama_flavor,
-        cli.device.as_deref(),
-        Some(&model),
-    )
-    .await?;
-    tracing::info!("rpc-server on 127.0.0.1:{rpc_port} serving {model_name}");
+    // Start rpc-server when the backend needs llama.cpp RPC workers.
+    let rpc_port = if primary_backend.capabilities().requires_rpc_server {
+        let port = launch::start_rpc_server(
+            &bin_dir,
+            cli.llama_flavor,
+            cli.device.as_deref(),
+            Some(&model),
+        )
+        .await?;
+        tracing::info!("rpc-server on 127.0.0.1:{port} serving {model_name}");
+        port
+    } else {
+        tracing::info!(
+            "Backend '{}' does not require rpc-server",
+            primary_backend.as_str()
+        );
+        0
+    };
 
     let tunnel_mgr =
         tunnel::Manager::start(node.clone(), rpc_port, channels.rpc, channels.http).await?;
@@ -1528,6 +1539,7 @@ async fn run_auto(
     let model_name_for_election = model_name.clone();
     let node_for_cb = node.clone();
     let primary_target_tx = target_tx.clone();
+    let primary_process_label = primary_backend.process_label().to_string();
     tokio::spawn(async move {
         election::election_loop(
             node2, tunnel_mgr2, rpc_port, bin_dir2, model2, model_name_for_election,
@@ -1548,7 +1560,7 @@ async fn run_auto(
                     eprintln!("  pi:    pi --provider mesh --model {model_name_for_cb}");
                     eprintln!("  goose: GOOSE_PROVIDER=openai OPENAI_HOST={url} OPENAI_API_KEY=mesh GOOSE_MODEL={model_name_for_cb} goose session");
                 } else if is_host {
-                    eprintln!("⏳ Starting llama-server...");
+                    eprintln!("⏳ Starting {primary_process_label}...");
                 } else {
                     eprintln!("  API: http://localhost:{api_port} (proxied to host)");
                 }
@@ -1573,25 +1585,15 @@ async fn run_auto(
         // Announce all models to mesh
         let all_names: Vec<String> = resolved_models
             .iter()
-            .map(|m| {
-                m.file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string()
-            })
+            .filter_map(|m| model_path_name(m))
             .collect();
         node.set_models(all_names).await;
         node.regossip().await;
 
         for extra_model in resolved_models.iter().skip(1) {
-            let extra_name = {
-                let stem = extra_model
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                router::strip_split_suffix_owned(&stem)
-            };
+            let extra_name = model_path_name(extra_model)
+                .map(|name| router::strip_split_suffix_owned(&name))
+                .unwrap_or_else(|| "unknown".to_string());
             let extra_node = node.clone();
             let extra_tunnel = tunnel_mgr.clone();
             let extra_bin = bin_dir.clone();
@@ -1687,7 +1689,7 @@ async fn run_auto(
         handle.abort();
     }
 
-    launch::kill_llama_server().await;
+    launch::kill_all_server_processes().await;
     launch::kill_orphan_rpc_servers().await;
     Ok(())
 }
@@ -2176,6 +2178,40 @@ fn detect_bin_dir() -> Result<PathBuf> {
     Ok(dir.to_path_buf())
 }
 
+fn huggingface_repo_id(path: &Path) -> Option<String> {
+    for component in path.components() {
+        let component = component.as_os_str().to_str()?;
+        if let Some(repo) = component.strip_prefix("models--") {
+            return Some(repo.replace("--", "/"));
+        }
+    }
+    None
+}
+
+fn model_path_name(path: &Path) -> Option<String> {
+    if let Some(repo_id) = huggingface_repo_id(path) {
+        return Some(repo_id);
+    }
+
+    if path.is_dir() {
+        return path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.to_string());
+    }
+
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some("gguf") => path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(|stem| stem.to_string()),
+        _ => path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.to_string()),
+    }
+}
+
 /// Update ~/.pi/agent/models.json to include a "mesh" provider.
 fn update_pi_models_json(model_id: &str, port: u16) {
     let Some(home) = dirs::home_dir() else { return };
@@ -2489,7 +2525,7 @@ async fn run_discover(
 fn run_stop() -> Result<()> {
     use std::process::Command as Cmd;
     let mut killed = 0u32;
-    for name in &["mesh-llm", "llama-server", "rpc-server"] {
+    for name in &["mesh-llm", "llama-server", "rpc-server", "mlx_lm.server"] {
         // pkill sends SIGTERM; ignore errors (process might not exist)
         let status = Cmd::new("pkill").arg("-f").arg(name).status();
         match status {
@@ -2980,15 +3016,8 @@ fn build_serving_list(resolved_models: &[PathBuf], model_name: &str) -> Vec<Stri
     let clean_name = router::strip_split_suffix_owned(model_name);
     let mut all: Vec<String> = resolved_models
         .iter()
-        .map(|m| {
-            let stem = m
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            // Strip split GGUF suffix: "Model-00001-of-00004" → "Model"
-            router::strip_split_suffix_owned(&stem)
-        })
+        .filter_map(|m| model_path_name(m))
+        .map(|name| router::strip_split_suffix_owned(&name))
         .collect();
     if !all.contains(&clean_name) {
         all.insert(0, clean_name);
@@ -3054,5 +3083,23 @@ mod tests {
         let result = build_serving_list(&resolved, "MiniMax-M2.5-Q4_K_M-00001-of-00004");
         assert_eq!(result, vec!["MiniMax-M2.5-Q4_K_M"]);
         assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_model_path_name_huggingface_snapshot_uses_repo_id() {
+        let path = PathBuf::from(
+            "/Users/test/.cache/huggingface/hub/models--mlx-community--Qwen2.5-1.5B-Instruct-4bit/snapshots/863c846a9ac6fad4e49e1743d52984dff262e953",
+        );
+        assert_eq!(
+            model_path_name(&path).as_deref(),
+            Some("mlx-community/Qwen2.5-1.5B-Instruct-4bit")
+        );
+    }
+
+    #[test]
+    fn test_build_serving_list_mlx_directory_keeps_directory_name() {
+        let resolved = vec![PathBuf::from("/home/.models/Qwen2.5-0.5B-Instruct-4bit")];
+        let result = build_serving_list(&resolved, "Qwen2.5-0.5B-Instruct-4bit");
+        assert_eq!(result, vec!["Qwen2.5-0.5B-Instruct-4bit"]);
     }
 }

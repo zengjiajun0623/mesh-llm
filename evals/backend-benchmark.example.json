@@ -1,0 +1,28 @@
+{
+  "backends": [
+    {
+      "name": "llama",
+      "launcher": "mesh",
+      "model": "$HOME/.models/Qwen2.5-0.5B-Instruct-F16.gguf"
+    },
+    {
+      "name": "mlx",
+      "launcher": "mesh",
+      "model": "$HOME/.cache/huggingface/hub/models--mlx-community--Qwen2.5-0.5B-Instruct-bf16/snapshots/REPLACE_ME"
+    },
+    {
+      "name": "vllm",
+      "launcher": "command",
+      "model": "$HOME/.models/hf/Qwen2.5-0.5B-Instruct",
+      "command": [
+        "vllm",
+        "serve",
+        "{model}",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "{port}"
+      ]
+    }
+  ]
+}

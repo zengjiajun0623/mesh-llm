@@ -63,6 +63,10 @@ mesh-llm --model Qwen2.5-32B              # downloads model (~20GB), starts API 
 mesh-llm --model Qwen2.5-3B               # or a small model first (~2GB)
 ```
 
+MLX model directories are supported too. If `--model` points at a local MLX model folder
+with `config.json`, tokenizer metadata, and `model.safetensors*`, mesh-llm launches
+`mlx_lm.server` automatically instead of `llama-server`.
+
 Add another machine:
 ```bash
 mesh-llm --join <token>                    # token printed by the first machine

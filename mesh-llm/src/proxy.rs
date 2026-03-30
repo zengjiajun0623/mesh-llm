@@ -3,9 +3,9 @@
 //! Used by the API proxy (port 9337), bootstrap proxy, and passive mode.
 //! All inference traffic flows through these functions.
 
-use crate::{election, mesh, router, tunnel};
+use crate::{election, launch, mesh, router, tunnel};
 use anyhow::Result;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 // ── Request parsing ──
@@ -73,6 +73,99 @@ pub fn is_models_list_request(buf: &[u8]) -> bool {
 pub fn is_drop_request(buf: &[u8]) -> bool {
     let s = String::from_utf8_lossy(buf);
     s.starts_with("POST ") && s.contains("/mesh/drop")
+}
+
+fn http_content_length(headers: &str) -> Option<usize> {
+    headers.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        if !name.eq_ignore_ascii_case("content-length") {
+            return None;
+        }
+        value.trim().parse().ok()
+    })
+}
+
+async fn read_http_request(stream: &mut TcpStream) -> Result<Vec<u8>> {
+    const MAX_REQUEST_BYTES: usize = 8 * 1024 * 1024;
+
+    let mut buf = Vec::with_capacity(32 * 1024);
+    let mut scratch = [0u8; 8192];
+    let mut expected_total = None;
+
+    loop {
+        let n = stream.read(&mut scratch).await?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&scratch[..n]);
+
+        if buf.len() > MAX_REQUEST_BYTES {
+            anyhow::bail!("HTTP request exceeds {MAX_REQUEST_BYTES} bytes");
+        }
+
+        if expected_total.is_none() {
+            if let Some(header_end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                let header_end = header_end + 4;
+                let headers = std::str::from_utf8(&buf[..header_end]).ok();
+                let content_length = headers.and_then(http_content_length).unwrap_or(0);
+                expected_total = Some(header_end + content_length);
+            }
+        }
+
+        if let Some(total) = expected_total {
+            if buf.len() >= total {
+                break;
+            }
+        }
+    }
+
+    Ok(buf)
+}
+
+fn rewrite_http_json_model(req: &[u8], model_override: &str) -> Option<Vec<u8>> {
+    let request = std::str::from_utf8(req).ok()?;
+    let (head, body) = request.split_once("\r\n\r\n")?;
+    let mut json: serde_json::Value = serde_json::from_str(body).ok()?;
+    json["model"] = serde_json::Value::String(model_override.to_string());
+    let new_body = serde_json::to_string(&json).ok()?;
+
+    let mut lines = head.split("\r\n");
+    let start_line = lines.next()?;
+    let mut saw_content_length = false;
+    let mut headers = Vec::new();
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        if line
+            .split_once(':')
+            .map(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            .unwrap_or(false)
+        {
+            headers.push(format!("Content-Length: {}", new_body.len()));
+            saw_content_length = true;
+        } else {
+            headers.push(line.to_string());
+        }
+    }
+    if !saw_content_length {
+        headers.push(format!("Content-Length: {}", new_body.len()));
+    }
+
+    Some(format!("{start_line}\r\n{}\r\n\r\n{new_body}", headers.join("\r\n")).into_bytes())
+}
+
+async fn relay_local_with_model_override(
+    node: mesh::Node,
+    mut tcp_stream: TcpStream,
+    mut upstream: TcpStream,
+    model_override: &str,
+) -> Result<()> {
+    let request = read_http_request(&mut tcp_stream).await?;
+    let rewritten = rewrite_http_json_model(&request, model_override).unwrap_or(request);
+    let _inflight = node.begin_inflight_request();
+    upstream.write_all(&rewritten).await?;
+    tunnel::relay_tcp_streams(tcp_stream, upstream).await
 }
 
 // ── Model-aware tunnel routing ──
@@ -199,6 +292,29 @@ pub async fn route_to_target(
 ) {
     match target {
         election::InferenceTarget::Local(port) | election::InferenceTarget::MoeLocal(port) => {
+            if let Some(model_override) = launch::mlx_model_override_for_port(port) {
+                match TcpStream::connect(format!("127.0.0.1:{port}")).await {
+                    Ok(upstream) => {
+                        let _ = upstream.set_nodelay(true);
+                        if let Err(e) = relay_local_with_model_override(
+                            node,
+                            tcp_stream,
+                            upstream,
+                            &model_override,
+                        )
+                        .await
+                        {
+                            tracing::debug!("API proxy (local mlx) ended: {e}");
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("API proxy: can't reach mlx backend on {port}: {e}");
+                        let _ = send_503(tcp_stream).await;
+                    }
+                }
+                return;
+            }
+
             match TcpStream::connect(format!("127.0.0.1:{port}")).await {
                 Ok(upstream) => {
                     let _inflight = node.begin_inflight_request();
@@ -208,7 +324,7 @@ pub async fn route_to_target(
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("API proxy: can't reach llama-server on {port}: {e}");
+                    tracing::warn!("API proxy: can't reach local inference server on {port}: {e}");
                     let _ = send_503(tcp_stream).await;
                 }
             }
@@ -513,5 +629,24 @@ mod tests {
     fn test_extract_model_from_http_basic() {
         let req = b"POST /v1/chat/completions HTTP/1.1\r\n\r\n{\"model\":\"Qwen3-30B\"}";
         assert_eq!(extract_model_from_http(req), Some("Qwen3-30B".to_string()));
+    }
+
+    #[test]
+    fn test_rewrite_http_json_model_updates_body_and_content_length() {
+        let req = b"POST /v1/chat/completions HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: 40\r\n\r\n{\"model\":\"mesh-alias\",\"messages\":[]}";
+        let rewritten =
+            rewrite_http_json_model(req, "/Users/test/.models/Qwen2.5-1.5B-Instruct-4bit").unwrap();
+        let rewritten = String::from_utf8(rewritten).unwrap();
+        assert!(rewritten.contains("\"model\":\"/Users/test/.models/Qwen2.5-1.5B-Instruct-4bit\""));
+        let body = rewritten.split("\r\n\r\n").nth(1).unwrap();
+        assert!(rewritten.contains(&format!("Content-Length: {}", body.len())));
+    }
+
+    #[test]
+    fn test_rewrite_http_json_model_adds_missing_model_field() {
+        let req = b"POST /v1/chat/completions HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: 15\r\n\r\n{\"messages\":[]}";
+        let rewritten = rewrite_http_json_model(req, "default_model").unwrap();
+        let rewritten = String::from_utf8(rewritten).unwrap();
+        assert!(rewritten.contains("\"model\":\"default_model\""));
     }
 }
