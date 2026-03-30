@@ -49,7 +49,7 @@ jobs:
             . -> target
 
       - name: Build mesh-llm + llama.cpp (CPU)
-        run: just --shell bash --shell-arg -lc build backend=cpu
+        run: just build backend=cpu
 
       - name: Cache model
         id: cache-model
@@ -66,8 +66,7 @@ jobs:
           ls -lh ~/.models/$MODEL_FILE
 
       - name: Run compat smoke
-        run: |
-          just --shell bash --shell-arg -lc compat-smoke ~/.models/$MODEL_FILE
+        run: just compat-smoke ~/.models/$MODEL_FILE
 
       - name: Show sccache stats
         if: always()
