@@ -299,7 +299,11 @@ async fn handle_inbound_http_stream(
     let _inflight = node.begin_inflight_request();
 
     let (tcp_read, tcp_write) = tokio::io::split(tcp_stream);
-    relay_bidirectional(tcp_read, tcp_write, quic_send, quic_recv).await
+    let request_to_llama =
+        tokio::spawn(async move { relay_quic_to_tcp(quic_recv, tcp_write).await });
+    let response_to_peer =
+        tokio::spawn(async move { relay_tcp_to_quic(tcp_read, quic_send).await });
+    finish_request_then_drain_response(request_to_llama, response_to_peer, "inbound_http").await
 }
 
 pub async fn relay_tcp_via_quic(
@@ -338,21 +342,28 @@ pub async fn relay_bidirectional(
     quic_send: iroh::endpoint::SendStream,
     quic_recv: iroh::endpoint::RecvStream,
 ) -> Result<()> {
-    let mut t1 = tokio::spawn(async move { relay_tcp_to_quic(tcp_read, quic_send).await });
-    let mut t2 = tokio::spawn(async move { relay_quic_to_tcp(quic_recv, tcp_write).await });
-    // If the request side finishes first, keep draining the response side.
-    // This matters for HTTP where the client may finish sending the request
-    // before the server has produced the response.
+    let request_to_peer = tokio::spawn(async move { relay_tcp_to_quic(tcp_read, quic_send).await });
+    let response_to_client =
+        tokio::spawn(async move { relay_quic_to_tcp(quic_recv, tcp_write).await });
+    finish_request_then_drain_response(request_to_peer, response_to_client, "relay_bidirectional")
+        .await
+}
+
+async fn finish_request_then_drain_response(
+    mut request_task: tokio::task::JoinHandle<Result<()>>,
+    mut response_task: tokio::task::JoinHandle<Result<()>>,
+    context: &str,
+) -> Result<()> {
     tokio::select! {
-        r1 = &mut t1 => {
-            r1??;
-            tracing::debug!("relay_bidirectional: request side finished, waiting for response side");
-            t2.await??;
+        request = &mut request_task => {
+            request??;
+            tracing::debug!("{context}: request side finished, waiting for response side");
+            response_task.await??;
         }
-        r2 = &mut t2 => {
-            r2??;
-            t1.abort();
-            let _ = t1.await;
+        response = &mut response_task => {
+            response??;
+            request_task.abort();
+            let _ = request_task.await;
         }
     }
     Ok(())
@@ -455,6 +466,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::oneshot;
 
     #[tokio::test]
     async fn relay_response_times_out_before_first_byte() {
@@ -546,5 +558,25 @@ mod tests {
             forwarded,
             b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"
         );
+    }
+
+    #[tokio::test]
+    async fn finish_request_then_drain_response_waits_for_response_after_request_eof() {
+        let (done_tx, done_rx) = oneshot::channel();
+        let request = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            Ok(())
+        });
+        let response = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            let _ = done_tx.send(());
+            Ok(())
+        });
+
+        finish_request_then_drain_response(request, response, "test")
+            .await
+            .unwrap();
+
+        done_rx.await.unwrap();
     }
 }

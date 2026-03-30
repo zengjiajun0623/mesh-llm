@@ -1948,6 +1948,7 @@ impl Node {
 
     /// Get all models currently being served in the mesh (loaded in VRAM somewhere).
     pub async fn models_being_served(&self) -> Vec<String> {
+        let my_role = self.role.lock().await.clone();
         let my_serving_models = self.serving_models.lock().await.clone();
         let my_serving = self.serving.lock().await.clone();
         let peer_data: Vec<_> = {
@@ -1955,31 +1956,10 @@ impl Node {
             state
                 .peers
                 .values()
-                .map(|p| (p.serving_models.clone(), p.serving.clone()))
+                .map(|p| (p.role.clone(), p.serving_models.clone(), p.serving.clone()))
                 .collect()
         };
-        let mut served = std::collections::HashSet::new();
-        for s in &my_serving_models {
-            served.insert(s.clone());
-        }
-        if my_serving_models.is_empty() {
-            if let Some(ref s) = my_serving {
-                served.insert(s.clone());
-            }
-        }
-        for (sm, s) in &peer_data {
-            for m in sm {
-                served.insert(m.clone());
-            }
-            if sm.is_empty() {
-                if let Some(ref s) = s {
-                    served.insert(s.clone());
-                }
-            }
-        }
-        let mut result: Vec<String> = served.into_iter().collect();
-        result.sort();
-        result
+        models_currently_hosted(my_role, my_serving_models, my_serving, peer_data)
     }
 
     /// Find a host for a specific model, using hash-based selection for load distribution.
@@ -3131,6 +3111,40 @@ impl Node {
     }
 }
 
+fn models_currently_hosted(
+    my_role: NodeRole,
+    my_serving_models: Vec<String>,
+    my_serving: Option<String>,
+    peer_data: Vec<(NodeRole, Vec<String>, Option<String>)>,
+) -> Vec<String> {
+    let mut served = std::collections::HashSet::new();
+    if matches!(my_role, NodeRole::Host { .. }) {
+        for s in &my_serving_models {
+            served.insert(s.clone());
+        }
+        if my_serving_models.is_empty() {
+            if let Some(ref s) = my_serving {
+                served.insert(s.clone());
+            }
+        }
+    }
+    for (role, sm, s) in &peer_data {
+        if matches!(role, NodeRole::Host { .. }) {
+            for m in sm {
+                served.insert(m.clone());
+            }
+            if sm.is_empty() {
+                if let Some(ref s) = s {
+                    served.insert(s.clone());
+                }
+            }
+        }
+    }
+    let mut result: Vec<String> = served.into_iter().collect();
+    result.sort();
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3544,6 +3558,41 @@ mod tests {
         let decoded: TestAnnouncement = serde_json::from_str(json).unwrap();
 
         assert_eq!(decoded.gpu_bandwidth_gbps, None);
+    }
+
+    #[test]
+    fn test_models_currently_hosted_only_includes_hosts() {
+        let served = models_currently_hosted(
+            NodeRole::Worker,
+            vec!["LocalDeclared".into()],
+            Some("LocalDeclared".into()),
+            vec![
+                (
+                    NodeRole::Worker,
+                    vec!["WorkerDeclared".into()],
+                    Some("WorkerDeclared".into()),
+                ),
+                (
+                    NodeRole::Host { http_port: 9001 },
+                    vec!["RemoteReady".into()],
+                    Some("RemoteReady".into()),
+                ),
+            ],
+        );
+
+        assert_eq!(served, vec!["RemoteReady"]);
+    }
+
+    #[test]
+    fn test_models_currently_hosted_uses_primary_serving_when_list_empty() {
+        let served = models_currently_hosted(
+            NodeRole::Host { http_port: 9000 },
+            vec![],
+            Some("LocalReady".into()),
+            vec![],
+        );
+
+        assert_eq!(served, vec!["LocalReady"]);
     }
 }
 

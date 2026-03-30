@@ -27,7 +27,7 @@ use clap::{Parser, Subcommand};
 use mesh::NodeRole;
 use std::path::{Path, PathBuf};
 
-pub const VERSION: &str = "0.52.0";
+pub const VERSION: &str = "0.52.1";
 
 #[derive(Parser, Debug)]
 #[command(name = "mesh-llm", version = VERSION,
@@ -2013,7 +2013,7 @@ async fn api_proxy(
                 Ok(request) => {
                     let body_json = request.body_json.as_ref();
                     if proxy::is_models_list_request(&request.method, &request.path) {
-                        let models: Vec<String> = targets.targets.keys().cloned().collect();
+                        let models = node.models_being_served().await;
                         let _ = proxy::send_models_list(tcp_stream, &models).await;
                         return;
                     }
@@ -2038,11 +2038,9 @@ async fn api_proxy(
                     {
                         if let Some(body_json) = body_json {
                             let cl = router::classify(body_json);
-                            let available: Vec<(&str, f64)> = targets
-                                .targets
-                                .keys()
-                                .map(|name| (name.as_str(), 0.0))
-                                .collect();
+                            let served = node.models_being_served().await;
+                            let available: Vec<(&str, f64)> =
+                                served.iter().map(|name| (name.as_str(), 0.0)).collect();
                             let picked = router::pick_model_classified(&cl, &available);
                             if let Some(name) = picked {
                                 tracing::info!(
@@ -2147,8 +2145,49 @@ async fn api_proxy(
                         );
                         let t = selection.target.clone();
                         if matches!(t, election::InferenceTarget::None) {
-                            tracing::debug!("Model '{}' not found, trying first available", name);
-                            first_available_target(&targets)
+                            let remote_hosts = node.hosts_for_model(name).await;
+                            if remote_hosts.is_empty() {
+                                tracing::debug!("Model '{}' not found, returning 503", name);
+                                let _ = proxy::send_503(tcp_stream).await;
+                                return;
+                            }
+
+                            let prepared = affinity::prepare_remote_targets_for_request(
+                                name,
+                                &remote_hosts,
+                                body_json,
+                                &affinity,
+                            );
+                            let target = prepared
+                                .ordered
+                                .iter()
+                                .find(|target| {
+                                    matches!(target, election::InferenceTarget::Remote(_))
+                                })
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    election::InferenceTarget::Remote(remote_hosts[0])
+                                });
+
+                            let routed = proxy::route_to_target(
+                                node.clone(),
+                                tcp_stream,
+                                target.clone(),
+                                &request.raw,
+                            )
+                            .await;
+                            if routed {
+                                if let Some(prefix_hash) = prepared.learn_prefix_hash {
+                                    affinity.learn_target(name, prefix_hash, &target);
+                                }
+                            } else if let (Some(prefix_hash), Some(cached_target)) =
+                                (prepared.learn_prefix_hash, prepared.cached_target.as_ref())
+                            {
+                                if cached_target == &target {
+                                    affinity.forget_target(name, prefix_hash, &target);
+                                }
+                            }
+                            return;
                         } else {
                             let routed = proxy::route_to_target(
                                 node.clone(),
@@ -3434,6 +3473,38 @@ mod tests {
 
         proxy_handle.abort();
         let _ = upstream_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_api_proxy_explicit_missing_model_returns_503_without_fallback() {
+        let (upstream_port, upstream_rx, upstream_handle) =
+            spawn_capturing_upstream(r#"{"ok":true}"#).await;
+        let (proxy_addr, proxy_handle) =
+            spawn_api_proxy_test_harness(local_targets(&[("llama", upstream_port)])).await;
+
+        let body = json!({
+            "model": "qwen",
+            "messages": [{"role": "user", "content": "hello"}],
+        })
+        .to_string();
+        let request = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+
+        let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+
+        assert!(response.starts_with("HTTP/1.1 503 Service Unavailable"));
+        assert!(response.contains("No inference server available"));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), upstream_rx)
+                .await
+                .is_err()
+        );
+
+        proxy_handle.abort();
+        upstream_handle.abort();
     }
 
     #[tokio::test]

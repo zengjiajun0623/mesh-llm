@@ -398,13 +398,14 @@ pub async fn handle_mesh_request(
         }
     }
 
-    // Resolve target hosts by model name, fall back to any host
+    // Resolve target hosts by model name. Explicit model requests must fail
+    // closed so we never answer with the wrong model.
     let target_hosts = if let Some(ref name) = effective_model {
         node.hosts_for_model(name).await
     } else {
         vec![]
     };
-    let target_hosts = if target_hosts.is_empty() {
+    let target_hosts = if target_hosts.is_empty() && effective_model.is_none() {
         match node.any_host().await {
             Some(p) => vec![p.id],
             None => {
@@ -412,6 +413,9 @@ pub async fn handle_mesh_request(
                 return;
             }
         }
+    } else if target_hosts.is_empty() {
+        let _ = send_503(tcp_stream).await;
+        return;
     } else {
         target_hosts
     };

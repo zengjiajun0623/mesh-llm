@@ -286,6 +286,7 @@ impl MeshApi {
         let served = node.models_being_served().await;
         let active_demand = node.active_demand().await;
         let my_serving_models = node.serving_models().await;
+        let my_role = node.role().await;
         let now_ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -298,12 +299,15 @@ impl MeshApi {
                     let peer_count = all_peers
                         .iter()
                         .filter(|p| {
-                            p.serving_models.iter().any(|s| s == name)
-                                || p.serving.as_deref() == Some(name.as_str())
+                            matches!(p.role, mesh::NodeRole::Host { .. })
+                                && (p.serving_models.iter().any(|s| s == name)
+                                    || p.serving.as_deref() == Some(name.as_str()))
                         })
                         .count();
-                    // Count self: check all serving models, fall back to primary model_name
-                    let me = if my_serving_models.iter().any(|s| s == name) || *name == model_name {
+                    // Count self only when we are currently hosting.
+                    let me = if matches!(my_role, mesh::NodeRole::Host { .. })
+                        && (my_serving_models.iter().any(|s| s == name) || *name == model_name)
+                    {
                         1
                     } else {
                         0
