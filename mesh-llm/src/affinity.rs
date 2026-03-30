@@ -330,12 +330,45 @@ fn hash_tagged_text(mut acc: u64, tag: &str, text: &str) -> u64 {
     hash_combine(acc, hash_bytes(text.as_bytes()))
 }
 
+fn hash_json_value(mut acc: u64, value: &Value) -> u64 {
+    match value {
+        Value::Null => hash_combine(acc, hash_bytes(b"null")),
+        Value::Bool(boolean) => {
+            acc = hash_combine(acc, hash_bytes(b"bool"));
+            hash_combine(acc, hash_bytes(boolean.to_string().as_bytes()))
+        }
+        Value::Number(number) => {
+            acc = hash_combine(acc, hash_bytes(b"number"));
+            hash_combine(acc, hash_bytes(number.to_string().as_bytes()))
+        }
+        Value::String(text) => {
+            acc = hash_combine(acc, hash_bytes(b"string"));
+            hash_combine(acc, hash_bytes(text.as_bytes()))
+        }
+        Value::Array(items) => {
+            acc = hash_combine(acc, hash_bytes(b"array"));
+            acc = hash_combine(acc, items.len() as u64);
+            for item in items {
+                acc = hash_json_value(acc, item);
+            }
+            acc
+        }
+        Value::Object(map) => {
+            acc = hash_combine(acc, hash_bytes(b"object"));
+            let mut keys: Vec<_> = map.keys().collect();
+            keys.sort_unstable();
+            for key in keys {
+                acc = hash_combine(acc, hash_bytes(key.as_bytes()));
+                acc = hash_json_value(acc, &map[key]);
+            }
+            acc
+        }
+    }
+}
+
 fn hash_tagged_json(mut acc: u64, tag: &str, value: &Value) -> u64 {
     acc = hash_combine(acc, hash_bytes(tag.as_bytes()));
-    match serde_json::to_string(value) {
-        Ok(json) => hash_combine(acc, hash_bytes(json.as_bytes())),
-        Err(_) => acc,
-    }
+    hash_json_value(acc, value)
 }
 
 fn scaffold_prefix_hash_from_body(body: &Value) -> Option<u64> {
@@ -581,6 +614,22 @@ mod tests {
         );
         let req_b = parse_body(
             r#"{"tools":[{"type":"function","function":{"name":"run"}}],"messages":[{"role":"system","content":"You are an agent."},{"role":"user","content":"fix bug B"}]}"#,
+        );
+
+        let keys_a = routing_keys(Some(&req_a));
+        let keys_b = routing_keys(Some(&req_b));
+
+        assert_eq!(keys_a.prefix_hash, keys_b.prefix_hash);
+        assert_ne!(keys_a.sticky_hash, keys_b.sticky_hash);
+    }
+
+    #[test]
+    fn test_routing_keys_prefix_ignores_object_key_order() {
+        let req_a = parse_body(
+            r#"{"tools":[{"type":"function","function":{"name":"run","description":"Run a command","parameters":{"type":"object","properties":{"path":{"type":"string"},"mode":{"type":"string"}},"required":["path","mode"]}}}],"messages":[{"role":"system","content":"You are an agent."},{"role":"user","content":"fix bug A"}]}"#,
+        );
+        let req_b = parse_body(
+            r#"{"tools":[{"function":{"parameters":{"required":["path","mode"],"properties":{"mode":{"type":"string"},"path":{"type":"string"}},"type":"object"},"description":"Run a command","name":"run"},"type":"function"}],"messages":[{"role":"system","content":"You are an agent."},{"role":"user","content":"fix bug B"}]}"#,
         );
 
         let keys_a = routing_keys(Some(&req_a));
