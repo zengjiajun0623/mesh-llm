@@ -82,7 +82,17 @@ fn bare_bin_name(path: &Path) -> Option<String> {
     let file_name = path.file_name()?.to_string_lossy();
     #[cfg(windows)]
     {
-        Some(file_name.trim_end_matches(".exe").to_string())
+        // On Windows, strip a `.exe` extension in a case-insensitive way.
+        if path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.eq_ignore_ascii_case("exe"))
+            .unwrap_or(false)
+        {
+            Some(path.file_stem()?.to_string_lossy().to_string())
+        } else {
+            Some(file_name.to_string())
+        }
     }
 
     #[cfg(not(windows))]
