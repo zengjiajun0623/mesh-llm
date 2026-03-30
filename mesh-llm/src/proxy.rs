@@ -4,7 +4,7 @@
 //! All inference traffic flows through these functions.
 
 use crate::{
-    affinity::{self, prepare_remote_targets_for_request, AffinityRouter, PreparedTargets},
+    affinity::{prepare_remote_targets_for_request, AffinityRouter, PreparedTargets},
     election, mesh, router, tunnel,
 };
 use anyhow::{anyhow, bail, Context, Result};
@@ -311,37 +311,6 @@ fn extract_session_hint_from_json(body: &serde_json::Value) -> Option<String> {
             .and_then(|value| value.as_str())
             .map(ToString::to_string)
     })
-}
-
-/// Extract `"model"` field from a JSON POST body in an HTTP request.
-pub fn extract_model_from_http(buf: &[u8]) -> Option<String> {
-    let s = std::str::from_utf8(buf).ok()?;
-    let body_start = s.find("\r\n\r\n")? + 4;
-    let body = &s[body_start..];
-    let model_key = "\"model\"";
-    let pos = body.find(model_key)?;
-    let after_key = &body[pos + model_key.len()..];
-    let after_colon = after_key.trim_start().strip_prefix(':')?;
-    let after_ws = after_colon.trim_start();
-    let after_quote = after_ws.strip_prefix('"')?;
-    let end = after_quote.find('"')?;
-    Some(after_quote[..end].to_string())
-}
-
-/// Extract a session hint from an HTTP request for MoE sticky routing.
-/// Looks for "user" or "session_id" in the JSON body. Falls back to None.
-pub fn extract_session_hint(buf: &[u8]) -> Option<String> {
-    extract_body_json(buf)
-        .as_ref()
-        .and_then(affinity::extract_session_hint_from_body)
-}
-
-/// Try to parse the JSON body from an HTTP request buffer.
-pub fn extract_body_json(buf: &[u8]) -> Option<serde_json::Value> {
-    let s = std::str::from_utf8(buf).ok()?;
-    let body_start = s.find("\r\n\r\n")? + 4;
-    let body = &s[body_start..];
-    serde_json::from_str(body).ok()
 }
 
 pub fn is_models_list_request(method: &str, path: &str) -> bool {
@@ -898,62 +867,6 @@ mod tests {
         }
         out.extend_from_slice(b"0\r\n\r\n");
         out
-    }
-
-    #[test]
-    fn test_extract_session_hint_user_field() {
-        let req = b"POST /v1/chat/completions HTTP/1.1\r\nContent-Type: application/json\r\n\r\n{\"model\":\"qwen\",\"user\":\"alice\",\"messages\":[]}";
-        assert_eq!(extract_session_hint(req), Some("alice".to_string()));
-    }
-
-    #[test]
-    fn test_extract_session_hint_session_id() {
-        let req = b"POST /v1/chat/completions HTTP/1.1\r\n\r\n{\"model\":\"qwen\",\"session_id\":\"sess-42\"}";
-        assert_eq!(extract_session_hint(req), Some("sess-42".to_string()));
-    }
-
-    #[test]
-    fn test_extract_session_hint_user_preferred_over_session_id() {
-        // "user" appears before "session_id" in our search order
-        let req = b"POST /v1/chat/completions HTTP/1.1\r\n\r\n{\"user\":\"bob\",\"session_id\":\"sess-1\"}";
-        assert_eq!(extract_session_hint(req), Some("bob".to_string()));
-    }
-
-    #[test]
-    fn test_extract_session_hint_none() {
-        let req = b"POST /v1/chat/completions HTTP/1.1\r\n\r\n{\"model\":\"qwen\",\"messages\":[]}";
-        assert_eq!(extract_session_hint(req), None);
-    }
-
-    #[test]
-    fn test_extract_session_hint_no_body() {
-        let req = b"GET /v1/models HTTP/1.1\r\n\r\n";
-        assert_eq!(extract_session_hint(req), None);
-    }
-
-    #[test]
-    fn test_extract_session_hint_no_headers_end() {
-        let req = b"POST /v1/chat body without proper headers";
-        assert_eq!(extract_session_hint(req), None);
-    }
-
-    #[test]
-    fn test_extract_session_hint_whitespace_variants() {
-        // Extra whitespace around colon and value
-        let req = b"POST / HTTP/1.1\r\n\r\n{\"user\" : \"charlie\" }";
-        assert_eq!(extract_session_hint(req), Some("charlie".to_string()));
-    }
-
-    #[test]
-    fn test_extract_session_hint_empty_value() {
-        let req = b"POST / HTTP/1.1\r\n\r\n{\"user\":\"\"}";
-        assert_eq!(extract_session_hint(req), Some("".to_string()));
-    }
-
-    #[test]
-    fn test_extract_model_from_http_basic() {
-        let req = b"POST /v1/chat/completions HTTP/1.1\r\n\r\n{\"model\":\"Qwen3-30B\"}";
-        assert_eq!(extract_model_from_http(req), Some("Qwen3-30B".to_string()));
     }
 
     #[test]
