@@ -31,6 +31,7 @@ message PeerAnnouncement {
   repeated ModelDemandEntry demand = 20;             // demand map entries (self entry only)
   map<string, uint64> available_model_sizes = 21;   // file sizes (bytes) per GGUF model name
   bytes serialized_addr = 22;                        // JSON-serialized EndpointAddr (includes network addresses for peer discovery)
+  repeated ModelManifest available_model_manifests = 23;
 }
 
 message CompactModelMetadata {
@@ -98,6 +99,33 @@ message RouteTable {
 message RouteEntry {
   bytes endpoint_id = 1;  // exactly 32 bytes (peer public key)
   string model = 2;       // model being served (empty if node is not actively serving)
+  optional ModelManifest manifest = 3;
+}
+
+message ModelManifest {
+  uint32 version = 1;
+  string route_model = 2;
+  string canonical_id = 3;
+  optional string display_name = 4;
+  optional string family = 5;
+  optional string architecture = 6;
+  optional string format = 7;
+  optional string quantization = 8;
+  optional ModelManifestSource source = 9;
+  optional ModelManifestCompatibility compatibility = 10;
+}
+
+message ModelManifestSource {
+  ManifestProvider provider = 1;
+  optional string repo = 2;
+  optional string revision = 3;
+  optional string file = 4;
+}
+
+message ModelManifestCompatibility {
+  optional string tokenizer_hash = 1;
+  optional string chat_template_hash = 2;
+  optional string base_model = 3;
 }
 
 // Stream 0x06 — Peer Down
@@ -118,4 +146,11 @@ enum NodeRole {
   WORKER = 1;
   HOST = 2;
   CLIENT = 3;
+}
+
+enum ManifestProvider {
+  UNKNOWN = 0;
+  HUGGING_FACE = 1;
+  DIRECT_URL = 2;
+  LOCAL = 3;
 }

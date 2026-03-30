@@ -270,6 +270,13 @@ DEBUG mesh: admitted peer <peer_id>
 
 Absence of JSON-related log lines for streams 0x01/0x03/0x05/0x06/0x07 confirms the protobuf path is active.
 
+### Verifying manifest propagation
+
+- Place a versioned `<model>.manifest.json` next to a local GGUF before starting the node.
+- Join a second worker node and confirm gossip carries the manifest: the remote peer should retain `available_model_manifests` after protobuf decode.
+- Start a passive client and confirm the route-table reply retains `RouteEntry.manifest` for each served model.
+- Negative test: a `RouteEntry.manifest.route_model` that does not match `RouteEntry.model` must be rejected during protobuf validation.
+
 ## Single-machine testing with ephemeral keys
 
 Set `MESH_LLM_EPHEMERAL_KEY=1` to give a second process a unique identity on the same machine.

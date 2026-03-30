@@ -80,6 +80,7 @@ fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool {
         || old.serving != new.serving
         || old.serving_models != new.serving_models
         || old.available_models != new.available_models
+        || old.available_model_manifests != new.available_model_manifests
         || old.requested_models != new.requested_models
         || old.version != new.version
 }
@@ -128,6 +129,9 @@ fn apply_transitive_ann(
     if !ann.available_model_metadata.is_empty() {
         existing.available_model_metadata = ann.available_model_metadata.clone();
     }
+    if !ann.available_model_manifests.is_empty() {
+        existing.available_model_manifests = ann.available_model_manifests.clone();
+    }
     if ann.experts_summary.is_some() {
         existing.experts_summary = ann.experts_summary.clone();
     }
@@ -174,6 +178,10 @@ pub(crate) enum ControlFrameError {
     DecodeError(String),
     WrongStreamType { expected: u8, got: u8 },
     ForgedSender,
+    InvalidManifestVersion { got: u32 },
+    MissingManifestRouteModel,
+    MissingManifestCanonicalId,
+    ManifestRouteModelMismatch,
 }
 
 impl std::fmt::Display for ControlFrameError {
@@ -206,6 +214,21 @@ impl std::fmt::Display for ControlFrameError {
             ),
             ControlFrameError::ForgedSender => {
                 write!(f, "frame peer_id does not match QUIC connection identity")
+            }
+            ControlFrameError::InvalidManifestVersion { got } => {
+                write!(f, "invalid manifest version: expected 1, got {}", got)
+            }
+            ControlFrameError::MissingManifestRouteModel => {
+                write!(f, "model manifest missing route_model")
+            }
+            ControlFrameError::MissingManifestCanonicalId => {
+                write!(f, "model manifest missing canonical_id")
+            }
+            ControlFrameError::ManifestRouteModelMismatch => {
+                write!(
+                    f,
+                    "route entry manifest route_model does not match route model"
+                )
             }
         }
     }
@@ -276,6 +299,12 @@ impl ValidateControlFrame for crate::proto::node::RouteTable {
                 return Err(ControlFrameError::InvalidEndpointId {
                     got: entry.endpoint_id.len(),
                 });
+            }
+            if let Some(manifest) = &entry.manifest {
+                validate_model_manifest(manifest)?;
+                if manifest.route_model != entry.model {
+                    return Err(ControlFrameError::ManifestRouteModelMismatch);
+                }
             }
         }
         Ok(())
@@ -364,6 +393,26 @@ pub(crate) fn validate_peer_announcement(
     if pa.role == crate::proto::node::NodeRole::Host as i32 && pa.http_port.is_none() {
         return Err(ControlFrameError::MissingHttpPort);
     }
+    for manifest in &pa.available_model_manifests {
+        validate_model_manifest(manifest)?;
+    }
+    Ok(())
+}
+
+fn validate_model_manifest(
+    manifest: &crate::proto::node::ModelManifest,
+) -> Result<(), ControlFrameError> {
+    if manifest.version != crate::model_manifest::MANIFEST_VERSION {
+        return Err(ControlFrameError::InvalidManifestVersion {
+            got: manifest.version,
+        });
+    }
+    if manifest.route_model.is_empty() {
+        return Err(ControlFrameError::MissingManifestRouteModel);
+    }
+    if manifest.canonical_id.is_empty() {
+        return Err(ControlFrameError::MissingManifestCanonicalId);
+    }
     Ok(())
 }
 
@@ -440,6 +489,8 @@ struct PeerAnnouncement {
     #[serde(skip)]
     available_model_metadata: Vec<crate::proto::node::CompactModelMetadata>,
     #[serde(skip)]
+    available_model_manifests: Vec<crate::proto::node::ModelManifest>,
+    #[serde(skip)]
     experts_summary: Option<crate::proto::node::ExpertsSummary>,
     #[serde(default)]
     available_model_sizes: HashMap<String, u64>,
@@ -476,6 +527,7 @@ pub struct PeerInfo {
     pub gpu_vram: Option<String>,
     pub gpu_bandwidth_gbps: Option<String>,
     pub available_model_metadata: Vec<crate::proto::node::CompactModelMetadata>,
+    pub available_model_manifests: Vec<crate::proto::node::ModelManifest>,
     pub experts_summary: Option<crate::proto::node::ExpertsSummary>,
     pub available_model_sizes: HashMap<String, u64>,
 }
@@ -633,6 +685,31 @@ pub fn scan_all_model_metadata() -> Vec<crate::proto::node::CompactModelMetadata
     result
 }
 
+pub fn scan_all_model_manifests() -> Vec<crate::proto::node::ModelManifest> {
+    let mut result = Vec::new();
+    for route_model in scan_local_models() {
+        let path = find_model_path(&route_model);
+        let Some(provenance) = crate::model_manifest::load_model_provenance(&path) else {
+            continue;
+        };
+        result.push(crate::model_manifest::to_proto_manifest(
+            &route_model,
+            &provenance,
+        ));
+    }
+    result
+}
+
+fn manifest_for_route_model(
+    manifests: &[crate::proto::node::ModelManifest],
+    route_model: &str,
+) -> Option<crate::proto::node::ModelManifest> {
+    manifests
+        .iter()
+        .find(|manifest| manifest.route_model == route_model)
+        .cloned()
+}
+
 /// Extract the base model name from a split GGUF stem.
 /// "GLM-5-UD-IQ2_XXS-00001-of-00006" → Some("GLM-5-UD-IQ2_XXS")
 /// "Qwen3-8B-Q4_K_M" → None (not a split file)
@@ -699,20 +776,20 @@ pub fn detect_vram_bytes_capped(max_vram_gb: Option<f64>) -> u64 {
 
 /// Lightweight routing table for passive nodes (clients + standby GPU).
 /// Contains just enough info to route requests to the right host.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct RoutingTable {
     pub hosts: Vec<RouteEntry>,
     /// Stable mesh identity — shared by all nodes in the same mesh.
-    #[serde(default)]
     pub mesh_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct RouteEntry {
     pub model: String,
     pub node_id: String,
     pub endpoint_id: EndpointId,
     pub vram_gb: f64,
+    pub manifest: Option<crate::proto::node::ModelManifest>,
 }
 
 /// Discover our public IP via STUN, then pair it with the given port.
@@ -1028,6 +1105,7 @@ fn local_ann_to_proto_ann(ann: &PeerAnnouncement) -> crate::proto::node::PeerAnn
         serving_models: ann.serving_models.clone(),
         requested_models: ann.requested_models.clone(),
         available_model_metadata: ann.available_model_metadata.clone(),
+        available_model_manifests: ann.available_model_manifests.clone(),
         experts_summary: ann.experts_summary.clone(),
         rtt_ms: None,
         catalog_models: ann.models.clone(),
@@ -1104,6 +1182,7 @@ fn proto_ann_to_local(
         gpu_vram: pa.gpu_vram.clone(),
         gpu_bandwidth_gbps: None,
         available_model_metadata: pa.available_model_metadata.clone(),
+        available_model_manifests: pa.available_model_manifests.clone(),
         experts_summary: pa.experts_summary.clone(),
         available_model_sizes: pa.available_model_sizes.clone(),
     };
@@ -1117,6 +1196,7 @@ fn routing_table_to_proto(table: &RoutingTable) -> crate::proto::node::RouteTabl
         .map(|e| crate::proto::node::RouteEntry {
             endpoint_id: e.endpoint_id.as_bytes().to_vec(),
             model: e.model.clone(),
+            manifest: e.manifest.clone(),
         })
         .collect();
     crate::proto::node::RouteTable {
@@ -1139,6 +1219,7 @@ fn proto_route_table_to_local(table: &crate::proto::node::RouteTable) -> Routing
                 node_id: endpoint_id.fmt_short().to_string(),
                 endpoint_id,
                 vram_gb: 0.0,
+                manifest: e.manifest.clone(),
             })
         })
         .collect();
@@ -2614,12 +2695,21 @@ impl Node {
     pub async fn routing_table(&self) -> RoutingTable {
         let my_serving = self.serving.lock().await.clone();
         let my_role = self.role.lock().await.clone();
+        let my_manifests = scan_all_model_manifests();
         let peer_data: Vec<_> = {
             let state = self.state.lock().await;
             state
                 .peers
                 .values()
-                .map(|p| (p.id, p.role.clone(), p.serving.clone(), p.vram_bytes))
+                .map(|p| {
+                    (
+                        p.id,
+                        p.role.clone(),
+                        p.serving.clone(),
+                        p.vram_bytes,
+                        p.available_model_manifests.clone(),
+                    )
+                })
                 .collect()
         };
         let mut hosts = Vec::new();
@@ -2632,12 +2722,13 @@ impl Node {
                     node_id: format!("{}", self.endpoint.id().fmt_short()),
                     endpoint_id: self.endpoint.id(),
                     vram_gb: self.vram_bytes as f64 / 1e9,
+                    manifest: manifest_for_route_model(&my_manifests, model),
                 });
             }
         }
 
         // Include peers that are hosts
-        for (id, role, serving, vram_bytes) in &peer_data {
+        for (id, role, serving, vram_bytes, manifests) in &peer_data {
             if matches!(role, NodeRole::Host { .. }) {
                 if let Some(ref model) = serving {
                     hosts.push(RouteEntry {
@@ -2645,6 +2736,7 @@ impl Node {
                         node_id: format!("{}", id.fmt_short()),
                         endpoint_id: *id,
                         vram_gb: *vram_bytes as f64 / 1e9,
+                        manifest: manifest_for_route_model(manifests, model),
                     });
                 }
             }
@@ -3660,6 +3752,9 @@ impl Node {
             if !ann.available_model_metadata.is_empty() {
                 existing.available_model_metadata = ann.available_model_metadata.clone();
             }
+            if !ann.available_model_manifests.is_empty() {
+                existing.available_model_manifests = ann.available_model_manifests.clone();
+            }
             if ann.experts_summary.is_some() {
                 existing.experts_summary = ann.experts_summary.clone();
             }
@@ -3728,6 +3823,7 @@ impl Node {
             gpu_vram: ann.gpu_vram.clone(),
             gpu_bandwidth_gbps: ann.gpu_bandwidth_gbps.clone(),
             available_model_metadata: ann.available_model_metadata.clone(),
+            available_model_manifests: ann.available_model_manifests.clone(),
             experts_summary: ann.experts_summary.clone(),
             available_model_sizes: ann.available_model_sizes.clone(),
         };
@@ -3813,6 +3909,7 @@ impl Node {
                 gpu_vram: ann.gpu_vram.clone(),
                 gpu_bandwidth_gbps: ann.gpu_bandwidth_gbps.clone(),
                 available_model_metadata: ann.available_model_metadata.clone(),
+                available_model_manifests: ann.available_model_manifests.clone(),
                 experts_summary: ann.experts_summary.clone(),
                 available_model_sizes: ann.available_model_sizes.clone(),
             };
@@ -3841,6 +3938,7 @@ impl Node {
         let stale_cutoff =
             std::time::Instant::now() - std::time::Duration::from_secs(PEER_STALE_SECS);
         let my_model_metadata = scan_all_model_metadata();
+        let my_model_manifests = scan_all_model_manifests();
         let my_model_sizes = scan_local_model_sizes();
         let mut announcements: Vec<PeerAnnouncement> = {
             let state = self.state.lock().await;
@@ -3867,6 +3965,7 @@ impl Node {
                     gpu_vram: p.gpu_vram.clone(),
                     gpu_bandwidth_gbps: p.gpu_bandwidth_gbps.clone(),
                     available_model_metadata: p.available_model_metadata.clone(),
+                    available_model_manifests: p.available_model_manifests.clone(),
                     experts_summary: p.experts_summary.clone(),
                     available_model_sizes: p.available_model_sizes.clone(),
                 })
@@ -3901,10 +4000,14 @@ impl Node {
             } else {
                 None
             },
-            gpu_bandwidth_gbps: self.gpu_bandwidth_gbps.lock().await
-                .as_ref()
-                .map(|v| v.iter().map(|f| format!("{:.2}", f)).collect::<Vec<_>>().join(",")),
+            gpu_bandwidth_gbps: self.gpu_bandwidth_gbps.lock().await.as_ref().map(|v| {
+                v.iter()
+                    .map(|f| format!("{:.2}", f))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            }),
             available_model_metadata: my_model_metadata,
+            available_model_manifests: my_model_manifests,
             experts_summary: None,
             available_model_sizes: my_model_sizes,
         });
@@ -4377,8 +4480,36 @@ mod tests {
             gpu_vram: None,
             gpu_bandwidth_gbps: None,
             available_model_metadata: vec![],
+            available_model_manifests: vec![],
             experts_summary: None,
             available_model_sizes: HashMap::new(),
+        }
+    }
+
+    fn make_test_model_manifest(
+        route_model: &str,
+        canonical_id: &str,
+    ) -> crate::proto::node::ModelManifest {
+        crate::proto::node::ModelManifest {
+            version: crate::model_manifest::MANIFEST_VERSION,
+            route_model: route_model.to_string(),
+            canonical_id: canonical_id.to_string(),
+            display_name: Some(route_model.to_string()),
+            family: Some("qwen3".to_string()),
+            architecture: Some("qwen3".to_string()),
+            format: Some("gguf".to_string()),
+            quantization: Some("Q4_K_M".to_string()),
+            source: Some(crate::proto::node::ModelManifestSource {
+                provider: crate::proto::node::ManifestProvider::HuggingFace as i32,
+                repo: Some("bartowski/Qwen3-8B-GGUF".to_string()),
+                revision: Some("abc123def456".to_string()),
+                file: Some("Qwen3-8B-Q4_K_M.gguf".to_string()),
+            }),
+            compatibility: Some(crate::proto::node::ModelManifestCompatibility {
+                tokenizer_hash: Some("tok-123".to_string()),
+                chat_template_hash: Some("chat-456".to_string()),
+                base_model: Some("Qwen/Qwen3-8B".to_string()),
+            }),
         }
     }
 
@@ -4655,6 +4786,8 @@ mod tests {
             expert_count_used: 8,
             top_expert_ids: vec![1, 5, 10],
         };
+        let manifest =
+            make_test_model_manifest("Qwen3-8B-Q4_K_M", "Qwen/Qwen3-8B@abc123/Qwen3-8B-Q4_K_M");
 
         let local_ann = super::PeerAnnouncement {
             addr: EndpointAddr {
@@ -4678,6 +4811,7 @@ mod tests {
             gpu_vram: Some("128 GB".to_string()),
             gpu_bandwidth_gbps: None,
             available_model_metadata: vec![meta.clone()],
+            available_model_manifests: vec![manifest.clone()],
             experts_summary: Some(experts.clone()),
             available_model_sizes: model_sizes.clone(),
         };
@@ -4706,6 +4840,11 @@ mod tests {
             proto_pa.available_model_sizes.get("Qwen3-8B-Q4_K_M"),
             Some(&4_800_000_000u64),
             "local_ann_to_proto_ann must carry available_model_sizes"
+        );
+        assert_eq!(proto_pa.available_model_manifests.len(), 1);
+        assert_eq!(
+            proto_pa.available_model_manifests[0].canonical_id,
+            manifest.canonical_id
         );
 
         let (_, roundtripped) = proto_ann_to_local(&proto_pa)
@@ -4737,6 +4876,11 @@ mod tests {
             Some(&4_800_000_000u64),
             "proto_ann_to_local must restore available_model_sizes"
         );
+        assert_eq!(roundtripped.available_model_manifests.len(), 1);
+        assert_eq!(
+            roundtripped.available_model_manifests[0].canonical_id,
+            manifest.canonical_id
+        );
 
         let frame = build_gossip_frame(&[local_ann], peer_id);
         assert_eq!(frame.sender_id, peer_id_bytes);
@@ -4762,6 +4906,11 @@ mod tests {
             wire_pa.available_model_sizes.get("Qwen3-8B-Q4_K_M"),
             Some(&4_800_000_000u64)
         );
+        assert_eq!(wire_pa.available_model_manifests.len(), 1);
+        assert_eq!(
+            wire_pa.available_model_manifests[0].canonical_id,
+            manifest.canonical_id
+        );
         assert_eq!(
             wire_pa
                 .experts_summary
@@ -4774,6 +4923,10 @@ mod tests {
         assert_eq!(
             final_local.available_model_metadata[0].model_key, "Qwen3-8B-Q4_K_M",
             "model_key unchanged after full build_gossip_frame→wire→proto_ann_to_local path"
+        );
+        assert_eq!(
+            final_local.available_model_manifests[0].canonical_id,
+            manifest.canonical_id
         );
     }
 
@@ -4870,6 +5023,8 @@ mod tests {
 
         let mut new_sizes = HashMap::new();
         new_sizes.insert("NewModel-Q4_K_M".to_string(), 4_800_000_000u64);
+        let manifest =
+            make_test_model_manifest("NewModel-Q4_K_M", "Qwen/Qwen3-8B@abc123/NewModel-Q4_K_M");
 
         let addr = EndpointAddr {
             id: peer_id,
@@ -4894,6 +5049,7 @@ mod tests {
             gpu_vram: None,
             gpu_bandwidth_gbps: None,
             available_model_metadata: vec![meta],
+            available_model_manifests: vec![manifest.clone()],
             experts_summary: None,
             available_model_sizes: new_sizes,
         };
@@ -4923,6 +5079,11 @@ mod tests {
         assert_eq!(
             existing.available_model_metadata[0].model_key,
             "NewModel-Q4_K_M"
+        );
+        assert_eq!(existing.available_model_manifests.len(), 1);
+        assert_eq!(
+            existing.available_model_manifests[0].canonical_id,
+            manifest.canonical_id
         );
         assert_eq!(
             existing.available_model_sizes.get("NewModel-Q4_K_M"),
@@ -4972,6 +5133,7 @@ mod tests {
             gpu_vram: None,
             gpu_bandwidth_gbps: None,
             available_model_metadata: vec![],
+            available_model_manifests: vec![],
             experts_summary: None,
             available_model_sizes: HashMap::new(),
         };
@@ -5017,6 +5179,7 @@ mod tests {
             gpu_vram: None,
             gpu_bandwidth_gbps: None,
             available_model_metadata: vec![],
+            available_model_manifests: vec![],
             experts_summary: None,
             available_model_sizes: HashMap::new(),
         };
@@ -5178,6 +5341,10 @@ mod tests {
             entries: vec![ProtoRouteEntry {
                 endpoint_id: peer_bytes.clone(),
                 model: "Qwen3-8B-Q4_K_M".to_string(),
+                manifest: Some(make_test_model_manifest(
+                    "Qwen3-8B-Q4_K_M",
+                    "Qwen/Qwen3-8B@abc123/Qwen3-8B-Q4_K_M",
+                )),
             }],
             mesh_id: Some("test-mesh-0102030405060708".to_string()),
             gen: NODE_PROTOCOL_GENERATION,
@@ -5190,6 +5357,13 @@ mod tests {
         assert_eq!(decoded_table.entries[0].endpoint_id, peer_bytes);
         assert_eq!(decoded_table.entries[0].model, "Qwen3-8B-Q4_K_M");
         assert_eq!(
+            decoded_table.entries[0]
+                .manifest
+                .as_ref()
+                .map(|manifest| manifest.canonical_id.as_str()),
+            Some("Qwen/Qwen3-8B@abc123/Qwen3-8B-Q4_K_M")
+        );
+        assert_eq!(
             decoded_table.mesh_id.as_deref(),
             Some("test-mesh-0102030405060708")
         );
@@ -5198,6 +5372,13 @@ mod tests {
         assert_eq!(local.hosts.len(), 1);
         assert_eq!(local.hosts[0].model, "Qwen3-8B-Q4_K_M");
         assert_eq!(local.hosts[0].endpoint_id, peer_id);
+        assert_eq!(
+            local.hosts[0]
+                .manifest
+                .as_ref()
+                .map(|manifest| manifest.canonical_id.as_str()),
+            Some("Qwen/Qwen3-8B@abc123/Qwen3-8B-Q4_K_M")
+        );
         assert_eq!(local.mesh_id.as_deref(), Some("test-mesh-0102030405060708"));
 
         let round_tripped = routing_table_to_proto(&local);
@@ -5206,9 +5387,40 @@ mod tests {
         assert_eq!(round_tripped.entries[0].endpoint_id, peer_bytes);
         assert_eq!(round_tripped.entries[0].model, "Qwen3-8B-Q4_K_M");
         assert_eq!(
+            round_tripped.entries[0]
+                .manifest
+                .as_ref()
+                .map(|manifest| manifest.canonical_id.as_str()),
+            Some("Qwen/Qwen3-8B@abc123/Qwen3-8B-Q4_K_M")
+        );
+        assert_eq!(
             round_tripped.mesh_id.as_deref(),
             Some("test-mesh-0102030405060708")
         );
+    }
+
+    #[test]
+    fn route_table_rejects_manifest_route_model_mismatch() {
+        use crate::proto::node::{RouteEntry as ProtoRouteEntry, RouteTable};
+
+        let peer_id = EndpointId::from(SecretKey::from_bytes(&[0x61; 32]).public());
+        let table = RouteTable {
+            entries: vec![ProtoRouteEntry {
+                endpoint_id: peer_id.as_bytes().to_vec(),
+                model: "Qwen3-8B-Q4_K_M".to_string(),
+                manifest: Some(make_test_model_manifest(
+                    "Qwen3-14B-Q4_K_M",
+                    "Qwen/Qwen3-14B@abc123/Qwen3-14B-Q4_K_M",
+                )),
+            }],
+            mesh_id: None,
+            gen: NODE_PROTOCOL_GENERATION,
+        };
+
+        let encoded = encode_control_frame(STREAM_ROUTE_REQUEST, &table);
+        let err = decode_control_frame::<RouteTable>(STREAM_ROUTE_REQUEST, &encoded)
+            .expect_err("route table must reject mismatched manifest route_model");
+        assert!(matches!(err, ControlFrameError::ManifestRouteModelMismatch));
     }
 
     #[test]
@@ -5582,6 +5794,10 @@ mod tests {
         };
         let mut model_sizes = std::collections::HashMap::new();
         model_sizes.insert("Llama-3.3-70B-Q4_K_M".to_string(), 42_000_000_000u64);
+        let manifest = make_test_model_manifest(
+            "Llama-3.3-70B-Q4_K_M",
+            "meta-llama/Llama-3.3-70B-Instruct@abc123/Llama-3.3-70B-Q4_K_M",
+        );
 
         let gossip_frame = GossipFrame {
             gen: NODE_PROTOCOL_GENERATION,
@@ -5592,6 +5808,7 @@ mod tests {
                 http_port: Some(9337),
                 catalog_models: vec!["Llama-3.3-70B-Q4_K_M".to_string()],
                 available_model_metadata: vec![meta.clone()],
+                available_model_manifests: vec![manifest.clone()],
                 available_model_sizes: model_sizes.clone(),
                 vram_bytes: 96 * 1024 * 1024 * 1024,
                 ..Default::default()
@@ -5627,6 +5844,11 @@ mod tests {
             Some(&42_000_000_000u64),
             "model sizes must survive wire encoding/decoding"
         );
+        assert_eq!(wire_pa.available_model_manifests.len(), 1);
+        assert_eq!(
+            wire_pa.available_model_manifests[0].canonical_id,
+            manifest.canonical_id
+        );
 
         // Convert to local PeerInfo and verify metadata is stored
         let (addr, local_ann) = proto_ann_to_local(wire_pa)
@@ -5645,6 +5867,11 @@ mod tests {
             local_ann.available_model_sizes.get("Llama-3.3-70B-Q4_K_M"),
             Some(&42_000_000_000u64),
             "available_model_sizes must be preserved in local struct (visible to /api/status)"
+        );
+        assert_eq!(local_ann.available_model_manifests.len(), 1);
+        assert_eq!(
+            local_ann.available_model_manifests[0].canonical_id,
+            manifest.canonical_id
         );
         assert_eq!(addr.id, peer_id, "peer EndpointId must match sender");
 
@@ -5671,6 +5898,7 @@ mod tests {
             gpu_vram: local_ann.gpu_vram.clone(),
             gpu_bandwidth_gbps: local_ann.gpu_bandwidth_gbps.clone(),
             available_model_metadata: local_ann.available_model_metadata.clone(),
+            available_model_manifests: local_ann.available_model_manifests.clone(),
             experts_summary: local_ann.experts_summary.clone(),
             available_model_sizes: local_ann.available_model_sizes.clone(),
         };
@@ -5690,6 +5918,11 @@ mod tests {
             stored.available_model_sizes.get("Llama-3.3-70B-Q4_K_M"),
             Some(&42_000_000_000u64)
         );
+        assert_eq!(stored.available_model_manifests.len(), 1);
+        assert_eq!(
+            stored.available_model_manifests[0].canonical_id,
+            manifest.canonical_id
+        );
     }
 
     /// Verifies that the passive-client route-table path populates the models list
@@ -5703,6 +5936,12 @@ mod tests {
 
         let worker_key = SecretKey::from_bytes(&[0xD1; 32]);
         let worker_id = EndpointId::from(worker_key.public());
+        let host_manifest =
+            make_test_model_manifest("Qwen3-32B-Q4_K_M", "Qwen/Qwen3-32B@abc123/Qwen3-32B-Q4_K_M");
+        let worker_manifest = make_test_model_manifest(
+            "GLM-4.7-Flash-Q4_K_M",
+            "THUDM/GLM-4.7-Flash@abc123/GLM-4.7-Flash-Q4_K_M",
+        );
 
         // Simulate a routing table as served by a host to a passive client
         let table = RouteTable {
@@ -5710,10 +5949,12 @@ mod tests {
                 ProtoRouteEntry {
                     endpoint_id: host_id.as_bytes().to_vec(),
                     model: "Qwen3-32B-Q4_K_M".to_string(),
+                    manifest: Some(host_manifest.clone()),
                 },
                 ProtoRouteEntry {
                     endpoint_id: worker_id.as_bytes().to_vec(),
                     model: "GLM-4.7-Flash-Q4_K_M".to_string(),
+                    manifest: Some(worker_manifest.clone()),
                 },
             ],
             mesh_id: Some("cafebabe12345678".to_string()),
@@ -5764,6 +6005,14 @@ mod tests {
             host_entry.endpoint_id, host_id,
             "host endpoint_id must be preserved in passive client route table"
         );
+        assert_eq!(
+            host_entry
+                .manifest
+                .as_ref()
+                .map(|manifest| manifest.canonical_id.as_str()),
+            Some(host_manifest.canonical_id.as_str()),
+            "host manifest must be preserved in passive client route table"
+        );
         let worker_entry = local
             .hosts
             .iter()
@@ -5772,6 +6021,14 @@ mod tests {
         assert_eq!(
             worker_entry.endpoint_id, worker_id,
             "worker endpoint_id must be preserved in passive client route table"
+        );
+        assert_eq!(
+            worker_entry
+                .manifest
+                .as_ref()
+                .map(|manifest| manifest.canonical_id.as_str()),
+            Some(worker_manifest.canonical_id.as_str()),
+            "worker manifest must be preserved in passive client route table"
         );
 
         // Verify a bad-generation RouteTable is rejected by passive clients

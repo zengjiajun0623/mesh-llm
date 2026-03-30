@@ -90,6 +90,7 @@ Each `PeerAnnouncement` describes one node's state. Key fields:
 | `mesh_id` | Stable mesh identity (self entry only) |
 | `demand` | Per-model demand entries (self entry only) |
 | `available_model_metadata` | GGUF-derived metadata for each available model |
+| `available_model_manifests` | Versioned model provenance for each available model |
 | `available_model_sizes` | File sizes in bytes per model name |
 | `serialized_addr` | JSON-serialized `EndpointAddr` for peer discovery |
 
@@ -113,6 +114,33 @@ message CompactModelMetadata {
 ```
 
 Fields covered: architecture, quantization type, tokenizer, RoPE parameters, expert counts (for MoE models), and standard transformer dimensions.
+
+### Manifest Provenance in Gossip
+
+Versioned model provenance from local `.manifest.json` sidecars is transported via `ModelManifest` in the `available_model_manifests` field of each `PeerAnnouncement`.
+
+```proto
+message ModelManifest {
+  uint32 version = 1;                 // must equal 1
+  string route_model = 2;             // local routing alias (mesh model name)
+  string canonical_id = 3;            // strict source identity
+  optional string display_name = 4;
+  optional string family = 5;
+  optional string architecture = 6;
+  optional string format = 7;         // e.g. "gguf", "mlx"
+  optional string quantization = 8;
+  optional ModelManifestSource source = 9;
+  optional ModelManifestCompatibility compatibility = 10;
+}
+```
+
+Portable provenance only:
+
+- `source.provider`, `source.repo`, `source.revision`, `source.file`
+- identity fields like `canonical_id`, `family`, `format`, `quantization`
+- compatibility hints like tokenizer/chat-template hashes
+
+Local artifact fields such as file hash, size, download timestamp, or filesystem paths are not sent on the wire.
 
 ## Stream 0x03 — Tunnel Map (`TunnelMap`)
 
@@ -156,10 +184,13 @@ message RouteTable {
 message RouteEntry {
   bytes endpoint_id = 1;  // exactly 32 bytes
   string model = 2;       // model being served (empty if not serving)
+  optional ModelManifest manifest = 3;
 }
 ```
 
 Serving a route table does not admit the requester. The requester is never added to `state.peers`.
+
+`RouteEntry.manifest` is scoped to the `(endpoint_id, model)` pair, not keyed globally by model name. This avoids collisions when two peers serve different checkpoints under the same route alias.
 
 ## Stream 0x06 — Peer Down (`PeerDown`)
 

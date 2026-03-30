@@ -195,11 +195,14 @@ trait Collector {
 | `is_soc` | `Option<bool>` | True for Tegra/Jetson (unified memory) |
 | `gpu_vram` | `Option<String>` | Comma-separated per-GPU VRAM in bytes |
 | `available_model_metadata` | `repeated CompactModelMetadata` | GGUF-derived metadata per available model |
+| `available_model_manifests` | `repeated ModelManifest` | Versioned model provenance per available model |
 | `available_model_sizes` | `map<string, uint64>` | File sizes in bytes per model name |
 | `mesh_id` | `optional string` | Stable mesh identity (self entry only) |
 | `demand` | `repeated ModelDemandEntry` | Per-model demand entries (self entry only) |
 
 GGUF-derived metadata (architecture, quantization type, tokenizer, RoPE parameters, expert counts) is transported via `CompactModelMetadata` in the `available_model_metadata` field. This lets peers learn model capabilities without downloading the file. The `ScannedModel` type in the proto schema carries the same information for catalog-level model listings.
+
+Versioned sidecar provenance is transported separately via `ModelManifest` in `available_model_manifests`. This keeps source identity (`repo`, `revision`, `file`, `canonical_id`) separate from GGUF header capabilities and lets the mesh compare equivalent checkpoints across export formats. Route-table replies also carry `RouteEntry.manifest`, scoped to the specific `(peer, route_model)` pair so two peers can advertise different source checkpoints under the same route alias without colliding in a global manifest map.
 
 ### `--enumerate-host` Flag
 
