@@ -134,6 +134,7 @@ struct PeerPayload {
 #[derive(Serialize)]
 struct MeshModelPayload {
     name: String,
+    display_name: String,
     status: String,
     node_count: usize,
     size_gb: f64,
@@ -302,6 +303,7 @@ impl MeshApi {
             .iter()
             .map(|name| {
                 let is_warm = served.contains(name);
+                let display_name = crate::models::installed_model_display_name(name);
                 let node_count = if is_warm {
                     let peer_count = all_peers
                         .iter()
@@ -359,6 +361,7 @@ impl MeshApi {
                 };
                 MeshModelPayload {
                     name: name.clone(),
+                    display_name,
                     status: if is_warm {
                         "warm".into()
                     } else {

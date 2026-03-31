@@ -601,6 +601,12 @@ pub fn installed_model_capabilities(model_name: &str) -> ModelCapabilities {
     capabilities::infer_local_model_capabilities(model_name, &path, catalog)
 }
 
+pub fn installed_model_display_name(model_name: &str) -> String {
+    find_catalog_model_exact(model_name)
+        .map(|model| model.name.clone())
+        .unwrap_or_else(|| model_name.to_string())
+}
+
 fn build_hf_api(progress: bool) -> Result<Api> {
     let mut builder = ApiBuilder::from_cache(huggingface_hub_cache()).with_progress(progress);
     if let Ok(endpoint) = std::env::var("HF_ENDPOINT") {

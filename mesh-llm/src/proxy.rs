@@ -593,8 +593,10 @@ pub async fn send_models_list(mut stream: TcpStream, models: &[String]) -> std::
             if capabilities.reasoning_label().is_some() {
                 caps.push("reasoning");
             }
+            let display_name = crate::models::installed_model_display_name(m);
             serde_json::json!({
                 "id": m,
+                "display_name": display_name,
                 "object": "model",
                 "owned_by": "mesh-llm",
                 "capabilities": caps,
