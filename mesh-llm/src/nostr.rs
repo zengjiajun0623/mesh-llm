@@ -366,20 +366,19 @@ pub async fn publish_loop(
 
         // "Actually serving" = a Host node has llama-server running for this model.
         let my_role = node.role().await;
-        let my_serving = node.serving().await;
         let mut actually_serving: Vec<String> = Vec::new();
         if matches!(my_role, crate::mesh::NodeRole::Host { .. }) {
-            if let Some(ref s) = my_serving {
-                if !actually_serving.contains(s) {
-                    actually_serving.push(s.clone());
+            for model in node.hosted_models().await {
+                if !actually_serving.contains(&model) {
+                    actually_serving.push(model);
                 }
             }
         }
         for p in &peers {
             if matches!(p.role, crate::mesh::NodeRole::Host { .. }) {
-                if let Some(ref s) = p.serving {
-                    if !actually_serving.contains(s) {
-                        actually_serving.push(s.clone());
+                for model in p.routable_models() {
+                    if !actually_serving.contains(&model) {
+                        actually_serving.push(model);
                     }
                 }
             }
@@ -399,14 +398,14 @@ pub async fn publish_loop(
 
         // Available = all GGUFs on disk across mesh, minus what's already warm
         let mut available: Vec<String> = Vec::new();
-        let my_available = node.available_models().await;
+        let my_available = node.catalog_models().await;
         for m in &my_available {
             if !served_set.contains(m.as_str()) && !available.contains(m) {
                 available.push(m.clone());
             }
         }
         for p in &peers {
-            for m in &p.available_models {
+            for m in &p.catalog_models {
                 if !served_set.contains(m.as_str()) && !available.contains(m) {
                     available.push(m.clone());
                 }

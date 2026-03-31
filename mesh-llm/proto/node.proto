@@ -17,20 +17,22 @@ message PeerAnnouncement {
   optional string hostname = 6;
   optional bool is_soc = 7;
   optional string gpu_vram = 8;
-  repeated string available_models = 9;
-  repeated string serving_models = 10;
-  repeated string requested_models = 11;
+  repeated string catalog_models = 9;                 // all models found on disk for mesh discovery
+  repeated string assigned_models = 10;               // election / model-group membership
+  repeated string desired_models = 11;                // operator intent for what the mesh should serve
   repeated CompactModelMetadata available_model_metadata = 12;
   optional ExpertsSummary experts_summary = 13;
   optional uint32 rtt_ms = 14;
-  repeated string catalog_models = 15;              // GGUF model names (mesh catalog contribution; was JSON `models`)
+  repeated string configured_models = 15;             // locally configured model set for this node
   uint64 vram_bytes = 16;                            // GPU VRAM in bytes
   optional string model_source = 17;                 // how to obtain this node's model
-  optional string primary_serving = 18;              // primary serving model (backward compat; was JSON `serving`)
+  reserved 18;
   optional string mesh_id = 19;                      // stable mesh identity (self entry only)
   repeated ModelDemandEntry demand = 20;             // demand map entries (self entry only)
   map<string, uint64> available_model_sizes = 21;   // file sizes (bytes) per GGUF model name
   bytes serialized_addr = 22;                        // JSON-serialized EndpointAddr (includes network addresses for peer discovery)
+  repeated string hosted_models = 23;                // actually routable / healthy
+  optional bool hosted_models_known = 24;            // false/absent when relayed from legacy JSON peers
 }
 
 message CompactModelMetadata {

@@ -145,7 +145,9 @@ struct StatusPayload {
     is_client: bool,
     llama_ready: bool,
     model_name: String,
-    serving_models: Vec<String>,
+    configured_models: Vec<String>,
+    catalog_models: Vec<String>,
+    desired_models: Vec<String>,
     assigned_models: Vec<String>,
     hosted_models: Vec<String>,
     draft_name: Option<String>,
@@ -173,12 +175,13 @@ struct StatusPayload {
 struct PeerPayload {
     id: String,
     role: String,
-    models: Vec<String>,
+    configured_models: Vec<String>,
+    catalog_models: Vec<String>,
+    desired_models: Vec<String>,
     vram_gb: f64,
-    serving: Option<String>,
-    serving_models: Vec<String>,
     assigned_models: Vec<String>,
     hosted_models: Vec<String>,
+    hosted_models_known: bool,
     rtt_ms: Option<u32>,
     hostname: Option<String>,
     is_soc: Option<bool>,
@@ -370,6 +373,9 @@ impl MeshApi {
         }; // inner lock dropped here
 
         let all_peers = node.peers().await;
+        let my_configured_models = node.configured_models().await;
+        let my_catalog_models = node.catalog_models().await;
+        let my_desired_models = node.desired_models().await;
         let peers: Vec<PeerPayload> = all_peers
             .iter()
             .map(|p| PeerPayload {
@@ -379,12 +385,13 @@ impl MeshApi {
                     mesh::NodeRole::Host { .. } => "Host".into(),
                     mesh::NodeRole::Client => "Client".into(),
                 },
-                models: p.models.clone(),
+                configured_models: p.configured_models.clone(),
+                catalog_models: p.catalog_models.clone(),
+                desired_models: p.desired_models.clone(),
                 vram_gb: p.vram_bytes as f64 / 1e9,
-                serving: p.serving.clone(),
-                serving_models: p.serving_models.clone(),
                 assigned_models: p.assigned_models.clone(),
                 hosted_models: p.hosted_models.clone(),
+                hosted_models_known: p.hosted_models_known,
                 rtt_ms: p.rtt_ms,
                 hostname: p.hostname.clone(),
                 is_soc: p.is_soc,
@@ -510,7 +517,9 @@ impl MeshApi {
             is_client,
             llama_ready,
             model_name,
-            serving_models: my_hosted_models.clone(),
+            configured_models: my_configured_models,
+            catalog_models: my_catalog_models,
+            desired_models: my_desired_models,
             assigned_models: my_assigned_models,
             hosted_models: my_hosted_models,
             draft_name,
@@ -1565,16 +1574,22 @@ mod tests {
                 },
             ],
         );
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].name, "Qwen");
-        assert_eq!(result[0].port, Some(9337));
-        assert_eq!(result[1].name, "Llama");
+        assert_eq!(result.models.len(), 2);
+        assert_eq!(result.models[0].name, "Qwen");
+        assert_eq!(result.models[0].port, Some(9337));
+        assert_eq!(result.models[1].name, "Llama");
     }
 
     #[test]
     fn test_build_runtime_status_payload_adds_starting_primary() {
-        let payload =
-            build_runtime_status_payload("Qwen", Some("llama".into()), true, false, Some(9337), vec![]);
+        let payload = build_runtime_status_payload(
+            "Qwen",
+            Some("llama".into()),
+            true,
+            false,
+            Some(9337),
+            vec![],
+        );
 
         assert_eq!(payload.primary_model.as_deref(), Some("Qwen"));
         assert_eq!(payload.models.len(), 1);

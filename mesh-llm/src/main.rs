@@ -1,8 +1,8 @@
 mod affinity;
 mod api;
 mod autoupdate;
-mod benchmark;
 mod backend;
+mod benchmark;
 mod download;
 mod election;
 mod hardware;
@@ -1411,9 +1411,8 @@ async fn run_auto(
     node.start_plugin_channel_forwarder(plugin_mesh_rx);
 
     // Advertise what we have on disk and what we want the mesh to serve
-    node.set_available_models(local_models.clone()).await;
-    node.set_requested_models(requested_model_names.clone())
-        .await;
+    node.set_catalog_models(local_models.clone()).await;
+    node.set_desired_models(requested_model_names.clone()).await;
 
     // Start periodic health check to detect dead peers
     node.start_heartbeat();
@@ -1686,7 +1685,7 @@ async fn run_auto(
     let all_declared = build_serving_list(&resolved_models, &model_name);
     node.set_assigned_models(all_declared.clone()).await;
     node.set_hosted_models(Vec::new()).await;
-    node.set_models(all_declared.clone()).await;
+    node.set_configured_models(all_declared.clone()).await;
     let static_model_names = all_declared.clone();
     // Re-gossip so peers learn our catalog/requested state without prematurely
     // routing requests to not-yet-ready local processes.
@@ -1913,7 +1912,7 @@ async fn run_auto(
                     .to_string()
             })
             .collect();
-        node.set_models(all_names).await;
+        node.set_configured_models(all_names).await;
         node.regossip().await;
 
         for extra_model in resolved_models.iter().skip(1) {
@@ -2062,7 +2061,7 @@ async fn run_auto(
 
                             add_runtime_local_target(&target_tx, &loaded_name, handle.port);
                             advertise_model_ready(&node, &primary_model_name, &loaded_name).await;
-                            node.set_available_models(mesh::scan_local_models()).await;
+                            node.set_catalog_models(mesh::scan_local_models()).await;
                             if let Some(ref cs) = console_state {
                                 cs.upsert_local_process(local_process_payload(
                                     &loaded_name,
@@ -2118,7 +2117,8 @@ async fn run_auto(
                             Ok(false)
                         } else if model == primary_model_name {
                             eprintln!("\n🗑 Model '{}' dropped from mesh — shutting down", model);
-                            node.set_serving(None).await;
+                            node.set_assigned_models(Vec::new()).await;
+                            node.set_hosted_models(Vec::new()).await;
                             shutdown_primary = true;
                             Ok(true)
                         } else if static_model_names.iter().any(|name| name == &model) {
@@ -2187,7 +2187,8 @@ async fn run_auto(
     }
 
     if !shutdown_primary {
-        node.set_serving(None).await;
+        node.set_assigned_models(Vec::new()).await;
+        node.set_hosted_models(Vec::new()).await;
     }
 
     launch::kill_llama_server().await;
@@ -2228,7 +2229,7 @@ async fn run_idle(cli: Cli, _bin_dir: PathBuf) -> Result<()> {
         cli.enumerate_host,
     )
     .await?;
-    node.set_available_models(local_models).await;
+    node.set_catalog_models(local_models).await;
     node.set_blackboard_name(blackboard_display_name(&cli, &node))
         .await;
     let (plugin_mesh_tx, plugin_mesh_rx) = tokio::sync::mpsc::channel(256);

@@ -62,30 +62,126 @@ fn peer_info_to_mesh_peer(peer: &PeerInfo) -> crate::plugin::proto::MeshPeer {
         capabilities: Vec::new(),
         role: node_role_label(&peer.role),
         vram_bytes: peer.vram_bytes,
-        models: peer.models.clone(),
-        serving_models: peer.serving_models.clone(),
-        available_models: peer.available_models.clone(),
-        requested_models: peer.requested_models.clone(),
+        configured_models: peer.configured_models.clone(),
+        assigned_models: peer.assigned_models.clone(),
+        catalog_models: peer.catalog_models.clone(),
+        desired_models: peer.desired_models.clone(),
         rtt_ms: peer.rtt_ms,
         model_source: peer.model_source.clone().unwrap_or_default(),
+        hosted_models: peer.hosted_models.clone(),
+        hosted_models_known: Some(peer.hosted_models_known),
     }
 }
 
 fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool {
     old.addr != new.addr
         || old.role != new.role
-        || old.models != new.models
+        || old.configured_models != new.configured_models
         || old.vram_bytes != new.vram_bytes
         || old.rtt_ms != new.rtt_ms
         || old.model_source != new.model_source
-        || old.serving != new.serving
-        || old.serving_models != new.serving_models
         || old.assigned_models != new.assigned_models
         || old.hosted_models_known != new.hosted_models_known
         || old.hosted_models != new.hosted_models
-        || old.available_models != new.available_models
-        || old.requested_models != new.requested_models
+        || old.catalog_models != new.catalog_models
+        || old.desired_models != new.desired_models
         || old.version != new.version
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LegacyPeerAnnouncementV0 {
+    addr: EndpointAddr,
+    #[serde(default)]
+    role: NodeRole,
+    #[serde(default)]
+    models: Vec<String>,
+    #[serde(default)]
+    vram_bytes: u64,
+    #[serde(default)]
+    model_source: Option<String>,
+    #[serde(default)]
+    serving: Option<String>,
+    #[serde(default)]
+    serving_models: Vec<String>,
+    #[serde(default)]
+    available_models: Vec<String>,
+    #[serde(default)]
+    requested_models: Vec<String>,
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    model_demand: HashMap<String, ModelDemand>,
+    #[serde(default)]
+    mesh_id: Option<String>,
+    #[serde(default)]
+    gpu_name: Option<String>,
+    #[serde(default)]
+    hostname: Option<String>,
+    #[serde(default)]
+    is_soc: Option<bool>,
+    #[serde(default)]
+    gpu_vram: Option<String>,
+    #[serde(default)]
+    gpu_bandwidth_gbps: Option<String>,
+    #[serde(default)]
+    available_model_sizes: HashMap<String, u64>,
+}
+
+impl LegacyPeerAnnouncementV0 {
+    fn into_internal(self) -> PeerAnnouncement {
+        let assigned_models = if !self.serving_models.is_empty() {
+            self.serving_models.clone()
+        } else {
+            self.serving.clone().into_iter().collect()
+        };
+        PeerAnnouncement {
+            addr: self.addr,
+            role: self.role,
+            configured_models: self.models,
+            vram_bytes: self.vram_bytes,
+            model_source: self.model_source,
+            assigned_models,
+            hosted_models: None,
+            catalog_models: self.available_models,
+            desired_models: self.requested_models,
+            version: self.version,
+            model_demand: self.model_demand,
+            mesh_id: self.mesh_id,
+            gpu_name: self.gpu_name,
+            hostname: self.hostname,
+            is_soc: self.is_soc,
+            gpu_vram: self.gpu_vram,
+            gpu_bandwidth_gbps: self.gpu_bandwidth_gbps,
+            available_model_metadata: vec![],
+            experts_summary: None,
+            available_model_sizes: self.available_model_sizes,
+        }
+    }
+}
+
+impl From<&PeerAnnouncement> for LegacyPeerAnnouncementV0 {
+    fn from(ann: &PeerAnnouncement) -> Self {
+        Self {
+            addr: ann.addr.clone(),
+            role: ann.role.clone(),
+            models: ann.configured_models.clone(),
+            vram_bytes: ann.vram_bytes,
+            model_source: ann.model_source.clone(),
+            serving: ann.assigned_models.first().cloned(),
+            serving_models: ann.assigned_models.clone(),
+            available_models: ann.catalog_models.clone(),
+            requested_models: ann.desired_models.clone(),
+            version: ann.version.clone(),
+            model_demand: ann.model_demand.clone(),
+            mesh_id: ann.mesh_id.clone(),
+            gpu_name: ann.gpu_name.clone(),
+            hostname: ann.hostname.clone(),
+            is_soc: ann.is_soc,
+            gpu_vram: ann.gpu_vram.clone(),
+            gpu_bandwidth_gbps: ann.gpu_bandwidth_gbps.clone(),
+            available_model_sizes: ann.available_model_sizes.clone(),
+        }
+    }
 }
 
 fn apply_transitive_ann(
@@ -93,25 +189,11 @@ fn apply_transitive_ann(
     addr: &EndpointAddr,
     ann: &PeerAnnouncement,
 ) -> bool {
-    let ann_assigned_models = ann.assigned_models.clone().unwrap_or_else(|| {
-        if !ann.serving_models.is_empty() {
-            ann.serving_models.clone()
-        } else {
-            ann.serving.clone().into_iter().collect()
-        }
-    });
-    let ann_hosted_models = ann
-        .hosted_models
-        .clone()
-        .unwrap_or_else(|| ann.serving_models.clone());
-    let serving_changed = existing.serving != ann.serving
-        || existing.serving_models != ann.serving_models
-        || existing.assigned_models != ann_assigned_models
+    let ann_hosted_models = ann.hosted_models.clone().unwrap_or_default();
+    let serving_changed = existing.assigned_models != ann.assigned_models
         || existing.hosted_models != ann_hosted_models
         || existing.hosted_models_known != ann.hosted_models.is_some();
-    existing.serving = ann.serving.clone();
-    existing.serving_models = ann.serving_models.clone();
-    existing.assigned_models = ann_assigned_models;
+    existing.assigned_models = ann.assigned_models.clone();
     existing.hosted_models = ann_hosted_models;
     existing.hosted_models_known = ann.hosted_models.is_some();
     existing.role = ann.role.clone();
@@ -139,9 +221,9 @@ fn apply_transitive_ann(
     if ann.gpu_bandwidth_gbps.is_some() {
         existing.gpu_bandwidth_gbps = ann.gpu_bandwidth_gbps.clone();
     }
-    existing.models = ann.models.clone();
-    existing.available_models = ann.available_models.clone();
-    existing.requested_models = ann.requested_models.clone();
+    existing.configured_models = ann.configured_models.clone();
+    existing.catalog_models = ann.catalog_models.clone();
+    existing.desired_models = ann.desired_models.clone();
     if ann.model_source.is_some() {
         existing.model_source = ann.model_source.clone();
     }
@@ -241,7 +323,9 @@ async fn write_gossip_payload(
             write_len_prefixed(send, &frame.encode_to_vec()).await?;
         }
         ControlProtocol::JsonV0 => {
-            let json = serde_json::to_vec(anns)?;
+            let legacy_anns: Vec<LegacyPeerAnnouncementV0> =
+                anns.iter().map(LegacyPeerAnnouncementV0::from).collect();
+            let json = serde_json::to_vec(&legacy_anns)?;
             write_len_prefixed(send, &json).await?;
         }
     }
@@ -273,10 +357,13 @@ fn decode_gossip_payload(
                 .collect::<Vec<_>>())
         }
         ControlProtocol::JsonV0 => {
-            let anns: Vec<PeerAnnouncement> = serde_json::from_slice(buf)?;
+            let anns: Vec<LegacyPeerAnnouncementV0> = serde_json::from_slice(buf)?;
             Ok(anns
                 .into_iter()
-                .map(|ann| (ann.addr.clone(), ann))
+                .map(|ann| {
+                    let ann = ann.into_internal();
+                    (ann.addr.clone(), ann)
+                })
                 .collect::<Vec<_>>())
         }
     }
@@ -523,71 +610,29 @@ impl Default for NodeRole {
 }
 
 /// Gossip payload — extends EndpointAddr with role metadata.
-/// Backward-compatible: old nodes that don't send role default to Worker.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Internal mesh gossip model. Legacy JSON v0 is adapted at the boundary.
+#[derive(Debug, Clone)]
 struct PeerAnnouncement {
     addr: EndpointAddr,
-    #[serde(default)]
     role: NodeRole,
-    /// GGUF model names on disk (catalog contribution)
-    #[serde(default)]
-    models: Vec<String>,
-    /// Available VRAM in bytes (0 = unknown)
-    #[serde(default)]
+    /// Models explicitly configured for this node.
+    configured_models: Vec<String>,
     vram_bytes: u64,
-    /// How to get the model — catalog name, HF URL, or filename.
-    /// Lets joining nodes auto-download without specifying --model.
-    #[serde(default)]
     model_source: Option<String>,
-    /// Primary model currently loaded in VRAM (None = not assigned yet).
-    /// Kept for backward compat — old nodes only read this field.
-    #[serde(default)]
-    serving: Option<String>,
-    /// All models this node can currently route inference for.
-    /// Old nodes read this as the ready/routable set.
-    #[serde(default)]
-    serving_models: Vec<String>,
-    /// All models assigned to this node, even if not yet healthy.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    assigned_models: Option<Vec<String>>,
-    /// Models this node can currently accept inference for.
-    /// This duplicates the ready/routable serving set for newer nodes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    assigned_models: Vec<String>,
     hosted_models: Option<Vec<String>>,
-    /// All GGUF filenames on disk in ~/.models/ (for mesh catalog)
-    #[serde(default)]
-    available_models: Vec<String>,
-    /// Models this node wants the mesh to serve (from --model flags)
-    #[serde(default)]
-    requested_models: Vec<String>,
-    /// mesh-llm version string (e.g. "0.23.0")
-    #[serde(default)]
+    catalog_models: Vec<String>,
+    desired_models: Vec<String>,
     version: Option<String>,
-    /// Mesh-wide demand map — only populated on the self entry.
-    /// Other entries default to empty (serde default).
-    #[serde(default)]
     model_demand: HashMap<String, ModelDemand>,
-    /// Stable mesh identity — only populated on the self entry.
-    #[serde(default)]
     mesh_id: Option<String>,
-    /// GPU name/model (e.g. "NVIDIA A100", "Apple M4 Max")
-    #[serde(default)]
     gpu_name: Option<String>,
-    /// Hostname of the node
-    #[serde(default)]
     hostname: Option<String>,
-    #[serde(default)]
     is_soc: Option<bool>,
-    #[serde(default)]
     gpu_vram: Option<String>,
-    /// Per-GPU p90 bandwidth in GB/s, comma-separated in device order (e.g. "1671.7,722.16")
-    #[serde(default)]
     gpu_bandwidth_gbps: Option<String>,
-    #[serde(skip)]
     available_model_metadata: Vec<crate::proto::node::CompactModelMetadata>,
-    #[serde(skip)]
     experts_summary: Option<crate::proto::node::ExpertsSummary>,
-    #[serde(default)]
     available_model_sizes: HashMap<String, u64>,
 }
 
@@ -597,14 +642,10 @@ pub struct PeerInfo {
     pub addr: EndpointAddr,
     pub tunnel_port: Option<u16>,
     pub role: NodeRole,
-    pub models: Vec<String>,
+    pub configured_models: Vec<String>,
     pub vram_bytes: u64,
     pub rtt_ms: Option<u32>,
     pub model_source: Option<String>,
-    /// Primary model currently loaded in VRAM
-    pub serving: Option<String>,
-    /// All models this peer can currently route inference for.
-    pub serving_models: Vec<String>,
     /// All models assigned to this peer, even if not yet healthy.
     pub assigned_models: Vec<String>,
     /// Models this node is actively routing inference for.
@@ -612,9 +653,9 @@ pub struct PeerInfo {
     /// True when this peer explicitly advertised `hosted_models`.
     pub hosted_models_known: bool,
     /// All GGUFs on disk
-    pub available_models: Vec<String>,
+    pub catalog_models: Vec<String>,
     /// Models this node has requested the mesh to serve
-    pub requested_models: Vec<String>,
+    pub desired_models: Vec<String>,
     /// Last time we directly communicated with this peer (gossip, heartbeat, tunnel).
     /// Peers not seen in PEER_STALE_SECS are pruned from gossip and eventually removed.
     pub last_seen: std::time::Instant,
@@ -633,47 +674,51 @@ pub struct PeerInfo {
 }
 
 impl PeerInfo {
-    pub fn assigned_models(&self) -> Vec<String> {
-        if !self.assigned_models.is_empty() {
-            self.assigned_models.clone()
-        } else if !self.serving_models.is_empty() {
-            self.serving_models.clone()
-        } else {
-            self.serving.clone().into_iter().collect()
+    fn from_announcement(id: EndpointId, addr: EndpointAddr, ann: &PeerAnnouncement) -> Self {
+        Self {
+            id,
+            addr,
+            tunnel_port: None,
+            role: ann.role.clone(),
+            configured_models: ann.configured_models.clone(),
+            vram_bytes: ann.vram_bytes,
+            rtt_ms: None,
+            model_source: ann.model_source.clone(),
+            assigned_models: ann.assigned_models.clone(),
+            hosted_models: ann.hosted_models.clone().unwrap_or_default(),
+            hosted_models_known: ann.hosted_models.is_some(),
+            catalog_models: ann.catalog_models.clone(),
+            desired_models: ann.desired_models.clone(),
+            last_seen: std::time::Instant::now(),
+            version: ann.version.clone(),
+            gpu_name: ann.gpu_name.clone(),
+            hostname: ann.hostname.clone(),
+            is_soc: ann.is_soc,
+            gpu_vram: ann.gpu_vram.clone(),
+            gpu_bandwidth_gbps: ann.gpu_bandwidth_gbps.clone(),
+            available_model_metadata: ann.available_model_metadata.clone(),
+            experts_summary: ann.experts_summary.clone(),
+            available_model_sizes: ann.available_model_sizes.clone(),
         }
     }
 
     pub fn is_assigned_model(&self, model: &str) -> bool {
-        if !self.assigned_models.is_empty() {
-            self.assigned_models.iter().any(|m| m == model)
-        } else if !self.serving_models.is_empty() {
-            self.serving_models.iter().any(|m| m == model)
-        } else {
-            self.serving.as_deref() == Some(model)
-        }
+        self.assigned_models.iter().any(|m| m == model)
     }
 
     pub fn routable_models(&self) -> Vec<String> {
-        if !self.serving_models.is_empty() {
-            self.serving_models.clone()
-        } else if self.hosted_models_known {
+        if self.hosted_models_known {
             self.hosted_models.clone()
-        } else if matches!(self.role, NodeRole::Host { .. }) {
-            self.serving.clone().into_iter().collect()
         } else {
-            Vec::new()
+            self.assigned_models.clone()
         }
     }
 
     pub fn routes_model(&self, model: &str) -> bool {
-        if !self.serving_models.is_empty() {
-            self.serving_models.iter().any(|m| m == model)
-        } else if self.hosted_models_known {
+        if self.hosted_models_known {
             self.hosted_models.iter().any(|m| m == model)
-        } else if matches!(self.role, NodeRole::Host { .. }) {
-            self.serving.as_deref() == Some(model)
         } else {
-            false
+            self.is_assigned_model(model)
         }
     }
 }
@@ -1008,14 +1053,13 @@ pub struct Node {
     public_addr: Option<std::net::SocketAddr>,
     state: Arc<Mutex<MeshState>>,
     role: Arc<Mutex<NodeRole>>,
-    models: Arc<Mutex<Vec<String>>>,
+    configured_models: Arc<Mutex<Vec<String>>>,
     model_source: Arc<Mutex<Option<String>>>,
-    serving: Arc<Mutex<Option<String>>>,
     assigned_models: Arc<Mutex<Vec<String>>>,
     hosted_models: Arc<Mutex<Vec<String>>>,
     llama_ready: Arc<Mutex<bool>>,
-    available_models: Arc<Mutex<Vec<String>>>,
-    requested_models: Arc<Mutex<Vec<String>>>,
+    catalog_models: Arc<Mutex<Vec<String>>>,
+    desired_models: Arc<Mutex<Vec<String>>>,
     /// Mesh-wide demand map — merged from gossip + local API requests.
     /// This is the single source of truth for "what does the mesh want?"
     model_demand: Arc<std::sync::Mutex<HashMap<String, ModelDemand>>>,
@@ -1223,20 +1267,21 @@ fn local_ann_to_proto_ann(ann: &PeerAnnouncement) -> crate::proto::node::PeerAnn
         hostname: ann.hostname.clone(),
         is_soc: ann.is_soc,
         gpu_vram: ann.gpu_vram.clone(),
-        available_models: ann.available_models.clone(),
-        serving_models: ann.serving_models.clone(),
-        requested_models: ann.requested_models.clone(),
+        catalog_models: ann.catalog_models.clone(),
+        assigned_models: ann.assigned_models.clone(),
+        desired_models: ann.desired_models.clone(),
         available_model_metadata: ann.available_model_metadata.clone(),
         experts_summary: ann.experts_summary.clone(),
         rtt_ms: None,
-        catalog_models: ann.models.clone(),
+        configured_models: ann.configured_models.clone(),
         vram_bytes: ann.vram_bytes,
         model_source: ann.model_source.clone(),
-        primary_serving: ann.serving.clone(),
         mesh_id: ann.mesh_id.clone(),
         demand,
         available_model_sizes: ann.available_model_sizes.clone(),
         serialized_addr,
+        hosted_models: ann.hosted_models.clone().unwrap_or_default(),
+        hosted_models_known: Some(ann.hosted_models.is_some()),
     }
 }
 
@@ -1284,16 +1329,21 @@ fn proto_ann_to_local(
             )
         })
         .collect();
+    let hosted_models = pa
+        .hosted_models_known
+        .unwrap_or(!pa.hosted_models.is_empty())
+        .then(|| pa.hosted_models.clone());
+    let assigned_models = pa.assigned_models.clone();
     let ann = PeerAnnouncement {
         addr: addr.clone(),
         role,
-        models: pa.catalog_models.clone(),
+        configured_models: pa.configured_models.clone(),
         vram_bytes: pa.vram_bytes,
         model_source: pa.model_source.clone(),
-        serving: pa.primary_serving.clone(),
-        serving_models: pa.serving_models.clone(),
-        available_models: pa.available_models.clone(),
-        requested_models: pa.requested_models.clone(),
+        assigned_models,
+        hosted_models,
+        catalog_models: pa.catalog_models.clone(),
+        desired_models: pa.desired_models.clone(),
         version: pa.version.clone(),
         model_demand,
         mesh_id: pa.mesh_id.clone(),
@@ -1498,14 +1548,13 @@ impl Node {
                 seen_plugin_message_order: VecDeque::new(),
             })),
             role: Arc::new(Mutex::new(role)),
-            models: Arc::new(Mutex::new(Vec::new())),
+            configured_models: Arc::new(Mutex::new(Vec::new())),
             model_source: Arc::new(Mutex::new(None)),
-            serving: Arc::new(Mutex::new(None)),
             assigned_models: Arc::new(Mutex::new(Vec::new())),
             hosted_models: Arc::new(Mutex::new(Vec::new())),
             llama_ready: Arc::new(Mutex::new(false)),
-            available_models: Arc::new(Mutex::new(Vec::new())),
-            requested_models: Arc::new(Mutex::new(Vec::new())),
+            catalog_models: Arc::new(Mutex::new(Vec::new())),
+            desired_models: Arc::new(Mutex::new(Vec::new())),
             model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
             mesh_id: Arc::new(Mutex::new(None)),
             accepting: Arc::new((
@@ -1583,14 +1632,13 @@ impl Node {
                 seen_plugin_message_order: VecDeque::new(),
             })),
             role: Arc::new(Mutex::new(role)),
-            models: Arc::new(Mutex::new(Vec::new())),
+            configured_models: Arc::new(Mutex::new(Vec::new())),
             model_source: Arc::new(Mutex::new(None)),
-            serving: Arc::new(Mutex::new(None)),
             assigned_models: Arc::new(Mutex::new(Vec::new())),
             hosted_models: Arc::new(Mutex::new(Vec::new())),
             llama_ready: Arc::new(Mutex::new(false)),
-            available_models: Arc::new(Mutex::new(Vec::new())),
-            requested_models: Arc::new(Mutex::new(Vec::new())),
+            catalog_models: Arc::new(Mutex::new(Vec::new())),
+            desired_models: Arc::new(Mutex::new(Vec::new())),
             model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
             mesh_id: Arc::new(Mutex::new(None)),
             accepting: Arc::new((
@@ -1718,21 +1766,19 @@ impl Node {
         *self.role.lock().await = role;
     }
 
-    pub async fn set_models(&self, models: Vec<String>) {
-        *self.models.lock().await = models;
+    pub async fn set_configured_models(&self, models: Vec<String>) {
+        *self.configured_models.lock().await = models;
+    }
+
+    pub async fn configured_models(&self) -> Vec<String> {
+        self.configured_models.lock().await.clone()
     }
 
     pub async fn set_model_source(&self, source: String) {
         *self.model_source.lock().await = Some(source);
     }
 
-    pub async fn set_serving(&self, model: Option<String>) {
-        *self.serving.lock().await = model;
-    }
-
     pub async fn set_assigned_models(&self, models: Vec<String>) {
-        // Also keep `serving` in sync (primary = first model)
-        *self.serving.lock().await = models.first().cloned();
         *self.assigned_models.lock().await = models;
     }
 
@@ -1870,7 +1916,7 @@ impl Node {
     }
 
     /// Re-gossip our state to all connected peers.
-    /// Call after changing serving/role/models so peers learn the update.
+    /// Call after changing assigned/hosted state, role, or configured models.
     pub async fn regossip(&self) {
         let conns: Vec<(EndpointId, Connection)> = {
             let state = self.state.lock().await;
@@ -1905,10 +1951,6 @@ impl Node {
         if let Some((peer_id, conn)) = conn {
             let _ = self.initiate_gossip_inner(conn, peer_id, false).await;
         }
-    }
-
-    pub async fn serving(&self) -> Option<String> {
-        self.serving.lock().await.clone()
     }
 
     pub async fn set_llama_ready(&self, ready: bool) {
@@ -1950,12 +1992,12 @@ impl Node {
         .await;
     }
 
-    pub async fn set_available_models(&self, models: Vec<String>) {
-        *self.available_models.lock().await = models;
+    pub async fn set_catalog_models(&self, models: Vec<String>) {
+        *self.catalog_models.lock().await = models;
     }
 
-    pub async fn available_models(&self) -> Vec<String> {
-        self.available_models.lock().await.clone()
+    pub async fn catalog_models(&self) -> Vec<String> {
+        self.catalog_models.lock().await.clone()
     }
 
     /// Record a request for a model — updates the demand map.
@@ -1987,11 +2029,11 @@ impl Node {
     /// Call periodically to prevent unbounded map growth.
     pub async fn gc_demand(&self) {
         let now = now_secs();
-        let my_requested = self.requested_models.lock().await;
+        let my_requested = self.desired_models.lock().await;
         let peers = self.state.lock().await;
         let mut pinned: std::collections::HashSet<String> = my_requested.iter().cloned().collect();
         for p in peers.peers.values() {
-            for m in &p.requested_models {
+            for m in &p.desired_models {
                 pinned.insert(m.clone());
             }
         }
@@ -2009,11 +2051,11 @@ impl Node {
         let demand = self.model_demand.lock().unwrap().clone();
 
         // Check which models are pinned (declared via --model by self or a live peer)
-        let my_requested = self.requested_models.lock().await;
+        let my_requested = self.desired_models.lock().await;
         let peers = self.state.lock().await;
         let mut pinned: std::collections::HashSet<String> = my_requested.iter().cloned().collect();
         for p in peers.peers.values() {
-            for m in &p.requested_models {
+            for m in &p.desired_models {
                 pinned.insert(m.clone());
             }
         }
@@ -2026,7 +2068,7 @@ impl Node {
             .collect()
     }
 
-    pub async fn set_requested_models(&self, models: Vec<String>) {
+    pub async fn set_desired_models(&self, models: Vec<String>) {
         // Seed demand entries for --model declarations
         {
             let mut demand = self.model_demand.lock().unwrap();
@@ -2036,7 +2078,11 @@ impl Node {
                 entry.last_active = entry.last_active.max(now);
             }
         }
-        *self.requested_models.lock().await = models;
+        *self.desired_models.lock().await = models;
+    }
+
+    pub async fn desired_models(&self) -> Vec<String> {
+        self.desired_models.lock().await.clone()
     }
 
     /// Start a background task that periodically checks peer health.
@@ -2802,9 +2848,9 @@ impl Node {
     /// Returns deduplicated list of model names (file stems, no .gguf).
     pub async fn mesh_catalog(&self) -> Vec<String> {
         // Snapshot each lock independently to avoid holding multiple locks.
-        let my_available = self.available_models.lock().await.clone();
-        let my_requested = self.requested_models.lock().await.clone();
-        let my_serving = self.serving.lock().await.clone();
+        let my_available = self.catalog_models.lock().await.clone();
+        let my_requested = self.desired_models.lock().await.clone();
+        let my_assigned = self.assigned_models.lock().await.clone();
         let peer_data: Vec<_> = {
             let state = self.state.lock().await;
             state
@@ -2812,9 +2858,9 @@ impl Node {
                 .values()
                 .map(|p| {
                     (
-                        p.available_models.clone(),
-                        p.requested_models.clone(),
-                        p.serving.clone(),
+                        p.catalog_models.clone(),
+                        p.desired_models.clone(),
+                        p.assigned_models.clone(),
                     )
                 })
                 .collect()
@@ -2826,18 +2872,18 @@ impl Node {
         for m in &my_requested {
             all.insert(m.clone());
         }
-        if let Some(ref s) = my_serving {
-            all.insert(s.clone());
+        for m in &my_assigned {
+            all.insert(m.clone());
         }
-        for (avail, req, serving) in &peer_data {
+        for (avail, req, assigned) in &peer_data {
             for m in avail {
                 all.insert(m.clone());
             }
             for m in req {
                 all.insert(m.clone());
             }
-            if let Some(ref s) = serving {
-                all.insert(s.clone());
+            for m in assigned {
+                all.insert(m.clone());
             }
         }
         let mut result: Vec<String> = all.into_iter().collect();
@@ -3199,7 +3245,7 @@ impl Node {
         };
 
         // If this peer was previously dead, immediately gossip to restore their
-        // serving status in our peer list. Without this, models served by the
+        // assigned/routable state in our peer list. Without this, models served by the
         // reconnecting peer stay invisible until the next heartbeat (up to 60s).
         if was_dead {
             let node = self.clone();
@@ -3911,20 +3957,8 @@ impl Node {
         if let Some(existing) = state.peers.get_mut(&id) {
             let old_peer = existing.clone();
             let role_changed = existing.role != ann.role;
-            let ann_assigned_models = ann.assigned_models.clone().unwrap_or_else(|| {
-                if !ann.serving_models.is_empty() {
-                    ann.serving_models.clone()
-                } else {
-                    ann.serving.clone().into_iter().collect()
-                }
-            });
-            let ann_hosted_models = ann
-                .hosted_models
-                .clone()
-                .unwrap_or_else(|| ann.serving_models.clone());
-            let serving_changed = existing.serving != ann.serving
-                || existing.serving_models != ann.serving_models
-                || existing.assigned_models != ann_assigned_models
+            let ann_hosted_models = ann.hosted_models.clone().unwrap_or_default();
+            let serving_changed = existing.assigned_models != ann.assigned_models
                 || existing.hosted_models != ann_hosted_models
                 || existing.hosted_models_known != ann.hosted_models.is_some();
             if role_changed {
@@ -3940,18 +3974,16 @@ impl Node {
             if !addr.addrs.is_empty() {
                 existing.addr = addr;
             }
-            existing.models = ann.models.clone();
+            existing.configured_models = ann.configured_models.clone();
             existing.vram_bytes = ann.vram_bytes;
             if ann.model_source.is_some() {
                 existing.model_source = ann.model_source.clone();
             }
-            existing.serving = ann.serving.clone();
-            existing.serving_models = ann.serving_models.clone();
-            existing.assigned_models = ann_assigned_models;
+            existing.assigned_models = ann.assigned_models.clone();
             existing.hosted_models = ann_hosted_models;
             existing.hosted_models_known = ann.hosted_models.is_some();
-            existing.available_models = ann.available_models.clone();
-            existing.requested_models = ann.requested_models.clone();
+            existing.catalog_models = ann.catalog_models.clone();
+            existing.desired_models = ann.desired_models.clone();
             existing.last_seen = std::time::Instant::now();
             if ann.version.is_some() {
                 existing.version = ann.version.clone();
@@ -4003,50 +4035,15 @@ impl Node {
             return;
         }
         tracing::info!(
-            "Peer added: {} role={:?} vram={:.1}GB serving={:?} available={:?} (total: {})",
+            "Peer added: {} role={:?} vram={:.1}GB assigned={:?} catalog={:?} (total: {})",
             id.fmt_short(),
             ann.role,
             ann.vram_bytes as f64 / 1e9,
-            ann.serving,
-            ann.available_models,
+            ann.assigned_models.first(),
+            ann.catalog_models,
             state.peers.len() + 1
         );
-        let peer = PeerInfo {
-            id,
-            addr,
-            tunnel_port: None,
-            role: ann.role.clone(),
-            models: ann.models.clone(),
-            vram_bytes: ann.vram_bytes,
-            rtt_ms: None,
-            model_source: ann.model_source.clone(),
-            serving: ann.serving.clone(),
-            serving_models: ann.serving_models.clone(),
-            assigned_models: ann.assigned_models.clone().unwrap_or_else(|| {
-                if !ann.serving_models.is_empty() {
-                    ann.serving_models.clone()
-                } else {
-                    ann.serving.clone().into_iter().collect()
-                }
-            }),
-            hosted_models: ann
-                .hosted_models
-                .clone()
-                .unwrap_or_else(|| ann.serving_models.clone()),
-            hosted_models_known: ann.hosted_models.is_some(),
-            available_models: ann.available_models.clone(),
-            requested_models: ann.requested_models.clone(),
-            last_seen: std::time::Instant::now(),
-            version: ann.version.clone(),
-            gpu_name: ann.gpu_name.clone(),
-            hostname: ann.hostname.clone(),
-            is_soc: ann.is_soc,
-            gpu_vram: ann.gpu_vram.clone(),
-            gpu_bandwidth_gbps: ann.gpu_bandwidth_gbps.clone(),
-            available_model_metadata: ann.available_model_metadata.clone(),
-            experts_summary: ann.experts_summary.clone(),
-            available_model_sizes: ann.available_model_sizes.clone(),
-        };
+        let peer = PeerInfo::from_announcement(id, addr, ann);
         state.peers.insert(id, peer.clone());
         let count = state.peers.len();
         drop(state);
@@ -4060,7 +4057,7 @@ impl Node {
     }
 
     /// Update a peer learned transitively through gossip (not directly connected).
-    /// Updates serving/role info so models_being_served() includes their models,
+    /// Updates assigned/hosted state so models_being_served() includes their models,
     /// but does NOT refresh last_seen — transitive peers still get pruned if the
     /// bridge node stops mentioning them. Does NOT trigger peer_change events
     /// for new transitive peers (avoids re-election storms at scale).
@@ -4108,42 +4105,7 @@ impl Node {
         } else {
             // New transitive peer — add with last_seen = now but no peer_change event.
             // It will get pruned after PEER_STALE_SECS*2 if never directly contacted.
-            let peer = PeerInfo {
-                id,
-                addr: addr.clone(),
-                tunnel_port: None,
-                role: ann.role.clone(),
-                models: ann.models.clone(),
-                vram_bytes: ann.vram_bytes,
-                rtt_ms: None,
-                model_source: ann.model_source.clone(),
-                serving: ann.serving.clone(),
-                serving_models: ann.serving_models.clone(),
-                assigned_models: ann.assigned_models.clone().unwrap_or_else(|| {
-                    if !ann.serving_models.is_empty() {
-                        ann.serving_models.clone()
-                    } else {
-                        ann.serving.clone().into_iter().collect()
-                    }
-                }),
-                hosted_models: ann
-                    .hosted_models
-                    .clone()
-                    .unwrap_or_else(|| ann.serving_models.clone()),
-                hosted_models_known: ann.hosted_models.is_some(),
-                available_models: ann.available_models.clone(),
-                requested_models: ann.requested_models.clone(),
-                last_seen: std::time::Instant::now(),
-                version: ann.version.clone(),
-                gpu_name: ann.gpu_name.clone(),
-                hostname: ann.hostname.clone(),
-                is_soc: ann.is_soc,
-                gpu_vram: ann.gpu_vram.clone(),
-                gpu_bandwidth_gbps: ann.gpu_bandwidth_gbps.clone(),
-                available_model_metadata: ann.available_model_metadata.clone(),
-                experts_summary: ann.experts_summary.clone(),
-                available_model_sizes: ann.available_model_sizes.clone(),
-            };
+            let peer = PeerInfo::from_announcement(id, addr.clone(), ann);
             state.peers.insert(id, peer.clone());
             drop(state);
             self.emit_plugin_mesh_event(
@@ -4158,12 +4120,12 @@ impl Node {
     async fn collect_announcements(&self) -> Vec<PeerAnnouncement> {
         // Snapshot all locks independently — never hold multiple locks simultaneously.
         let my_role = self.role.lock().await.clone();
-        let my_models = self.models.lock().await.clone();
+        let my_models = self.configured_models.lock().await.clone();
         let my_source = self.model_source.lock().await.clone();
         let my_assigned_models = self.assigned_models.lock().await.clone();
         let my_hosted_models = self.hosted_models.lock().await.clone();
-        let my_available = self.available_models.lock().await.clone();
-        let my_requested = self.requested_models.lock().await.clone();
+        let my_available = self.catalog_models.lock().await.clone();
+        let my_requested = self.desired_models.lock().await.clone();
         let my_mesh_id = self.mesh_id.lock().await.clone();
         let my_demand = self.get_demand();
         let stale_cutoff =
@@ -4179,16 +4141,13 @@ impl Node {
                 .map(|p| PeerAnnouncement {
                     addr: p.addr.clone(),
                     role: p.role.clone(),
-                    models: p.models.clone(),
+                    configured_models: p.configured_models.clone(),
                     vram_bytes: p.vram_bytes,
                     model_source: p.model_source.clone(),
-                    serving: p.serving.clone(),
-                    serving_models: p.serving_models.clone(),
-                    assigned_models: (!p.assigned_models.is_empty())
-                        .then(|| p.assigned_models.clone()),
+                    assigned_models: p.assigned_models.clone(),
                     hosted_models: p.hosted_models_known.then(|| p.hosted_models.clone()),
-                    available_models: p.available_models.clone(),
-                    requested_models: p.requested_models.clone(),
+                    catalog_models: p.catalog_models.clone(),
+                    desired_models: p.desired_models.clone(),
                     version: p.version.clone(),
                     model_demand: HashMap::new(),
                     mesh_id: None,
@@ -4206,15 +4165,13 @@ impl Node {
         announcements.push(PeerAnnouncement {
             addr: self.endpoint.addr(),
             role: my_role,
-            models: my_models,
+            configured_models: my_models,
             vram_bytes: self.vram_bytes,
             model_source: my_source,
-            serving: my_hosted_models.first().cloned(),
-            serving_models: my_hosted_models.clone(),
-            assigned_models: Some(my_assigned_models),
+            assigned_models: my_assigned_models,
             hosted_models: Some(my_hosted_models),
-            available_models: my_available,
-            requested_models: my_requested,
+            catalog_models: my_available,
+            desired_models: my_requested,
             version: Some(crate::VERSION.to_string()),
             model_demand: my_demand,
             mesh_id: my_mesh_id,
@@ -4285,13 +4242,13 @@ mod tests {
                 seen_plugin_message_order: VecDeque::new(),
             })),
             role: Arc::new(Mutex::new(role)),
-            models: Arc::new(Mutex::new(Vec::new())),
+            configured_models: Arc::new(Mutex::new(Vec::new())),
             model_source: Arc::new(Mutex::new(None)),
-            serving: Arc::new(Mutex::new(None)),
-            serving_models: Arc::new(Mutex::new(Vec::new())),
+            assigned_models: Arc::new(Mutex::new(Vec::new())),
+            hosted_models: Arc::new(Mutex::new(Vec::new())),
             llama_ready: Arc::new(Mutex::new(false)),
-            available_models: Arc::new(Mutex::new(Vec::new())),
-            requested_models: Arc::new(Mutex::new(Vec::new())),
+            catalog_models: Arc::new(Mutex::new(Vec::new())),
+            desired_models: Arc::new(Mutex::new(Vec::new())),
             model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
             mesh_id: Arc::new(Mutex::new(None)),
             accepting: Arc::new((
@@ -4764,7 +4721,10 @@ mod tests {
         let post_node = make_test_node(super::NodeRole::Host { http_port: 9337 }).await?;
         let post_id = post_node.id();
         post_node
-            .set_serving_models(vec!["post-model".to_string()])
+            .set_assigned_models(vec!["post-model".to_string()])
+            .await;
+        post_node
+            .set_hosted_models(vec!["post-model".to_string()])
             .await;
         post_node
             .set_mesh_id("compat-mesh-01020304".to_string())
@@ -4784,7 +4744,7 @@ mod tests {
             .await?;
         let legacy_id = legacy_endpoint.id();
         let legacy_addr = legacy_endpoint.addr();
-        let legacy_ann = super::PeerAnnouncement {
+        let legacy_ann = super::LegacyPeerAnnouncementV0 {
             addr: legacy_addr.clone(),
             role: super::NodeRole::Host { http_port: 9444 },
             models: vec!["legacy-model".to_string()],
@@ -4802,8 +4762,6 @@ mod tests {
             is_soc: Some(false),
             gpu_vram: Some((48_u64 * 1024 * 1024 * 1024).to_string()),
             gpu_bandwidth_gbps: None,
-            available_model_metadata: vec![],
-            experts_summary: None,
             available_model_sizes: HashMap::new(),
         };
         let legacy_route_table = RoutingTable {
@@ -4844,7 +4802,7 @@ mod tests {
             let gossip_buf = read_len_prefixed(&mut recv_gossip)
                 .await
                 .expect("legacy server must read JSON gossip frame");
-            let received_anns: Vec<super::PeerAnnouncement> =
+            let received_anns: Vec<super::LegacyPeerAnnouncementV0> =
                 serde_json::from_slice(&gossip_buf).expect("legacy gossip must decode as JSON");
             assert!(
                 received_anns
@@ -4900,8 +4858,9 @@ mod tests {
             let response_buf = read_len_prefixed(&mut recv_gossip2)
                 .await
                 .expect("post node should answer legacy gossip");
-            let response_anns: Vec<super::PeerAnnouncement> = serde_json::from_slice(&response_buf)
-                .expect("post node must answer with JSON gossip");
+            let response_anns: Vec<super::LegacyPeerAnnouncementV0> =
+                serde_json::from_slice(&response_buf)
+                    .expect("post node must answer with JSON gossip");
             assert!(
                 response_anns
                     .iter()
@@ -4949,7 +4908,8 @@ mod tests {
             loop {
                 let peers = post_node.peers().await;
                 if peers.iter().any(|peer| {
-                    peer.id == legacy_id && peer.serving.as_deref() == Some("legacy-model")
+                    peer.id == legacy_id
+                        && peer.assigned_models.first().map(String::as_str) == Some("legacy-model")
                 }) {
                     break;
                 }
@@ -4988,7 +4948,7 @@ mod tests {
     #[test]
     fn legacy_json_gossip_payload_decodes() {
         let peer_id = EndpointId::from(SecretKey::from_bytes(&[0x42; 32]).public());
-        let ann = super::PeerAnnouncement {
+        let ann = super::LegacyPeerAnnouncementV0 {
             addr: EndpointAddr {
                 id: peer_id,
                 addrs: Default::default(),
@@ -5015,8 +4975,6 @@ mod tests {
             is_soc: Some(false),
             gpu_vram: Some("51539607552".into()),
             gpu_bandwidth_gbps: None,
-            available_model_metadata: vec![],
-            experts_summary: None,
             available_model_sizes: HashMap::from([("Qwen".into(), 1234_u64)]),
         };
         let json = serde_json::to_vec(&vec![ann.clone()]).unwrap();
@@ -5025,7 +4983,10 @@ mod tests {
 
         assert_eq!(decoded.len(), 1);
         assert_eq!(decoded[0].0.id, peer_id);
-        assert_eq!(decoded[0].1.serving.as_deref(), Some("Qwen"));
+        assert_eq!(
+            decoded[0].1.assigned_models.first().map(String::as_str),
+            Some("Qwen")
+        );
         assert_eq!(decoded[0].1.mesh_id.as_deref(), Some("mesh-compat"));
     }
 
@@ -5063,14 +5024,15 @@ mod tests {
             },
             tunnel_port: None,
             role: super::NodeRole::Worker,
-            models: vec![],
+            configured_models: vec![],
             vram_bytes: 0,
             rtt_ms: None,
             model_source: None,
-            serving: None,
-            serving_models: vec![],
-            available_models: vec![],
-            requested_models: vec![],
+            assigned_models: vec![],
+            hosted_models: vec![],
+            hosted_models_known: false,
+            catalog_models: vec![],
+            desired_models: vec![],
             last_seen: std::time::Instant::now(),
             version: None,
             gpu_name: None,
@@ -5364,13 +5326,13 @@ mod tests {
                 addrs: Default::default(),
             },
             role: super::NodeRole::Host { http_port: 8080 },
-            models: vec!["Qwen3-8B-Q4_K_M".to_string()],
+            configured_models: vec!["Qwen3-8B-Q4_K_M".to_string()],
             vram_bytes: 128 * 1024 * 1024 * 1024,
             model_source: Some("bartowski/Qwen3-8B-GGUF".to_string()),
-            serving: Some("Qwen3-8B-Q4_K_M".to_string()),
-            serving_models: vec!["Qwen3-8B-Q4_K_M".to_string()],
-            available_models: vec!["Qwen3-8B-Q4_K_M".to_string()],
-            requested_models: vec![],
+            assigned_models: vec!["Qwen3-8B-Q4_K_M".to_string()],
+            hosted_models: Some(vec!["Qwen3-8B-Q4_K_M".to_string()]),
+            catalog_models: vec!["Qwen3-8B-Q4_K_M".to_string()],
+            desired_models: vec![],
             version: Some("0.42.0".to_string()),
             model_demand: HashMap::new(),
             mesh_id: Some("deadbeef12345678".to_string()),
@@ -5545,9 +5507,9 @@ mod tests {
 
         let peer_id = EndpointId::from(SecretKey::from_bytes(&[0x10; 32]).public());
         let mut existing = make_test_peer_info(peer_id);
-        existing.available_models = vec!["OldModel-Q4_K_M".to_string()];
-        existing.models = vec!["OldModel-Q4_K_M".to_string()];
-        existing.requested_models = vec!["OldModel-Q4_K_M".to_string()];
+        existing.catalog_models = vec!["OldModel-Q4_K_M".to_string()];
+        existing.configured_models = vec!["OldModel-Q4_K_M".to_string()];
+        existing.desired_models = vec!["OldModel-Q4_K_M".to_string()];
 
         let meta = CompactModelMetadata {
             model_key: "NewModel-Q4_K_M".to_string(),
@@ -5580,13 +5542,13 @@ mod tests {
         let ann = super::PeerAnnouncement {
             addr: addr.clone(),
             role: super::NodeRole::Worker,
-            models: vec!["NewModel-Q4_K_M".to_string()],
+            configured_models: vec!["NewModel-Q4_K_M".to_string()],
             vram_bytes: 8 * 1024 * 1024 * 1024,
             model_source: Some("new-source".to_string()),
-            serving: Some("NewModel-Q4_K_M".to_string()),
-            serving_models: vec!["NewModel-Q4_K_M".to_string()],
-            available_models: vec!["NewModel-Q4_K_M".to_string()],
-            requested_models: vec!["NewModel-Q4_K_M".to_string()],
+            assigned_models: vec!["NewModel-Q4_K_M".to_string()],
+            hosted_models: Some(vec!["NewModel-Q4_K_M".to_string()]),
+            catalog_models: vec!["NewModel-Q4_K_M".to_string()],
+            desired_models: vec!["NewModel-Q4_K_M".to_string()],
             version: None,
             model_demand: HashMap::new(),
             mesh_id: None,
@@ -5603,17 +5565,17 @@ mod tests {
         apply_transitive_ann(&mut existing, &addr, &ann);
 
         assert_eq!(
-            existing.available_models,
+            existing.catalog_models,
             vec!["NewModel-Q4_K_M".to_string()],
             "available_models must be refreshed from transitive gossip"
         );
         assert_eq!(
-            existing.models,
+            existing.configured_models,
             vec!["NewModel-Q4_K_M".to_string()],
             "models must be refreshed from transitive gossip"
         );
         assert_eq!(
-            existing.requested_models,
+            existing.desired_models,
             vec!["NewModel-Q4_K_M".to_string()],
             "requested_models must be refreshed from transitive gossip"
         );
@@ -5658,13 +5620,13 @@ mod tests {
         let ann = super::PeerAnnouncement {
             addr: weak_addr.clone(),
             role: super::NodeRole::Worker,
-            models: vec!["SomeModel-Q4_K_M".to_string()],
+            configured_models: vec!["SomeModel-Q4_K_M".to_string()],
             vram_bytes: 4 * 1024 * 1024 * 1024,
             model_source: None,
-            serving: None,
-            serving_models: vec![],
-            available_models: vec!["SomeModel-Q4_K_M".to_string()],
-            requested_models: vec![],
+            assigned_models: vec![],
+            hosted_models: None,
+            catalog_models: vec!["SomeModel-Q4_K_M".to_string()],
+            desired_models: vec![],
             version: None,
             model_demand: HashMap::new(),
             mesh_id: None,
@@ -5686,7 +5648,7 @@ mod tests {
             "rich direct address (3 paths) must not be overwritten by weaker transitive addr (1 path)"
         );
         assert_eq!(
-            existing.available_models,
+            existing.catalog_models,
             vec!["SomeModel-Q4_K_M".to_string()],
             "available_models must still be updated even when addr is preserved"
         );
@@ -5703,13 +5665,13 @@ mod tests {
         let ann2 = super::PeerAnnouncement {
             addr: richer_addr.clone(),
             role: super::NodeRole::Worker,
-            models: vec!["SomeModel-Q4_K_M".to_string()],
+            configured_models: vec!["SomeModel-Q4_K_M".to_string()],
             vram_bytes: 4 * 1024 * 1024 * 1024,
             model_source: None,
-            serving: None,
-            serving_models: vec![],
-            available_models: vec!["SomeModel-Q4_K_M".to_string()],
-            requested_models: vec![],
+            assigned_models: vec![],
+            hosted_models: None,
+            catalog_models: vec!["SomeModel-Q4_K_M".to_string()],
+            desired_models: vec![],
             version: None,
             model_demand: HashMap::new(),
             mesh_id: None,
@@ -6351,30 +6313,7 @@ mod tests {
 
         // Build PeerInfo as add_peer would, verify metadata fields are set
         let mut peers: HashMap<EndpointId, PeerInfo> = HashMap::new();
-        let peer_info = PeerInfo {
-            id: peer_id,
-            addr: addr.clone(),
-            tunnel_port: None,
-            role: local_ann.role.clone(),
-            models: local_ann.models.clone(),
-            vram_bytes: local_ann.vram_bytes,
-            rtt_ms: None,
-            model_source: local_ann.model_source.clone(),
-            serving: local_ann.serving.clone(),
-            serving_models: local_ann.serving_models.clone(),
-            available_models: local_ann.available_models.clone(),
-            requested_models: local_ann.requested_models.clone(),
-            last_seen: std::time::Instant::now(),
-            version: local_ann.version.clone(),
-            gpu_name: local_ann.gpu_name.clone(),
-            hostname: local_ann.hostname.clone(),
-            is_soc: local_ann.is_soc,
-            gpu_vram: local_ann.gpu_vram.clone(),
-            gpu_bandwidth_gbps: local_ann.gpu_bandwidth_gbps.clone(),
-            available_model_metadata: local_ann.available_model_metadata.clone(),
-            experts_summary: local_ann.experts_summary.clone(),
-            available_model_sizes: local_ann.available_model_sizes.clone(),
-        };
+        let peer_info = PeerInfo::from_announcement(peer_id, addr.clone(), &local_ann);
         peers.insert(peer_id, peer_info);
 
         let stored = peers.get(&peer_id).unwrap();
