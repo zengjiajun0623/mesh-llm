@@ -6392,13 +6392,25 @@ pub fn was_previously_public() -> bool {
 pub fn clear_public_identity() {
     let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     let dir = home.join(".mesh-llm");
-    for name in &["key", "nostr.nsec", "mesh-id", "last-mesh", "was-public"] {
+    let mut ok = true;
+    for name in &["key", "nostr.nsec", "mesh-id", "last-mesh"] {
         let p = dir.join(name);
         if p.exists() {
             if std::fs::remove_file(&p).is_ok() {
                 tracing::info!("Cleared {}", p.display());
+            } else {
+                tracing::warn!("Failed to clear {}", p.display());
+                ok = false;
             }
         }
+    }
+    // Only remove the marker after identity files are gone, so a failed
+    // cleanup is retried on the next private start.
+    let marker = dir.join("was-public");
+    if ok {
+        let _ = std::fs::remove_file(&marker);
+    } else {
+        tracing::warn!("Keeping was-public marker — will retry cleanup next start");
     }
 }
 
