@@ -416,28 +416,28 @@ async fn withdraw_advertised_model(node: &mesh::Node, model_name: &str) {
 }
 
 async fn add_serving_assignment(node: &mesh::Node, primary_model_name: &str, model_name: &str) {
-    let mut assigned_models = node.assigned_models().await;
-    if assigned_models.iter().any(|m| m == model_name) {
+    let mut serving_models = node.serving_models().await;
+    if serving_models.iter().any(|m| m == model_name) {
         return;
     }
-    assigned_models.push(model_name.to_string());
-    assigned_models.sort();
-    if let Some(pos) = assigned_models.iter().position(|m| m == primary_model_name) {
-        let primary = assigned_models.remove(pos);
-        assigned_models.insert(0, primary);
+    serving_models.push(model_name.to_string());
+    serving_models.sort();
+    if let Some(pos) = serving_models.iter().position(|m| m == primary_model_name) {
+        let primary = serving_models.remove(pos);
+        serving_models.insert(0, primary);
     }
-    node.set_assigned_models(assigned_models).await;
+    node.set_serving_models(serving_models).await;
     node.regossip().await;
 }
 
 async fn remove_serving_assignment(node: &mesh::Node, model_name: &str) {
-    let mut assigned_models = node.assigned_models().await;
-    let old_len = assigned_models.len();
-    assigned_models.retain(|m| m != model_name);
-    if assigned_models.len() == old_len {
+    let mut serving_models = node.serving_models().await;
+    let old_len = serving_models.len();
+    serving_models.retain(|m| m != model_name);
+    if serving_models.len() == old_len {
         return;
     }
-    node.set_assigned_models(assigned_models).await;
+    node.set_serving_models(serving_models).await;
     node.regossip().await;
 }
 
@@ -1704,7 +1704,7 @@ async fn run_auto(
     // Declare which models this node may serve, but do not advertise them as
     // live/routable until their local processes have passed health checks.
     let all_declared = build_serving_list(&resolved_models, &model_name);
-    node.set_assigned_models(all_declared.clone()).await;
+    node.set_serving_models(all_declared.clone()).await;
     node.set_hosted_models(Vec::new()).await;
     node.set_configured_models(all_declared.clone()).await;
     let static_model_names = all_declared.clone();
@@ -2137,7 +2137,7 @@ async fn run_auto(
                             Ok(false)
                         } else if model == primary_model_name {
                             eprintln!("\n🗑 Model '{}' dropped from mesh — shutting down", model);
-                            node.set_assigned_models(Vec::new()).await;
+                            node.set_serving_models(Vec::new()).await;
                             node.set_hosted_models(Vec::new()).await;
                             shutdown_primary = true;
                             Ok(true)
@@ -2207,7 +2207,7 @@ async fn run_auto(
     }
 
     if !shutdown_primary {
-        node.set_assigned_models(Vec::new()).await;
+        node.set_serving_models(Vec::new()).await;
         node.set_hosted_models(Vec::new()).await;
     }
 
@@ -4307,7 +4307,7 @@ mod tests {
 
         host.set_role(mesh::NodeRole::Host { http_port: 9337 })
             .await;
-        host.set_assigned_models(vec!["Primary".into()]).await;
+        host.set_serving_models(vec!["Primary".into()]).await;
         host.set_hosted_models(vec!["Primary".into()]).await;
 
         observer.sync_from_peer_for_tests(&host).await;

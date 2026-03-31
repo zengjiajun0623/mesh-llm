@@ -389,7 +389,7 @@ impl MeshApi {
                 available_models: p.catalog_models.clone(),
                 requested_models: p.desired_models.clone(),
                 vram_gb: p.vram_bytes as f64 / 1e9,
-                serving_models: p.assigned_models.clone(),
+                serving_models: p.serving_models.clone(),
                 hosted_models: p.hosted_models.clone(),
                 hosted_models_known: p.hosted_models_known,
                 rtt_ms: p.rtt_ms,
@@ -406,7 +406,7 @@ impl MeshApi {
         let catalog = node.mesh_catalog().await;
         let served = node.models_being_served().await;
         let active_demand = node.active_demand().await;
-        let my_assigned_models = node.assigned_models().await;
+        let my_serving_models = node.serving_models().await;
         let my_hosted_models = node.hosted_models().await;
         let now_ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -520,7 +520,7 @@ impl MeshApi {
             configured_models: my_configured_models,
             available_models: my_catalog_models,
             requested_models: my_desired_models,
-            serving_models: my_assigned_models,
+            serving_models: my_serving_models,
             hosted_models: my_hosted_models,
             draft_name,
             api_port,

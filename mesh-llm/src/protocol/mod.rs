@@ -380,7 +380,7 @@ mod tests {
             vram_bytes: 0,
             rtt_ms: None,
             model_source: None,
-            assigned_models: vec![],
+            serving_models: vec![],
             hosted_models: vec![],
             hosted_models_known: false,
             catalog_models: vec![],
@@ -420,7 +420,7 @@ mod tests {
             configured_models: vec!["Qwen".into()],
             vram_bytes: 48_000_000_000,
             model_source: Some("Qwen.gguf".into()),
-            assigned_models: vec!["Qwen".into()],
+            serving_models: vec!["Qwen".into()],
             hosted_models: Some(vec!["Qwen".into()]),
             catalog_models: vec!["Qwen".into()],
             desired_models: vec!["Qwen".into()],
@@ -449,7 +449,7 @@ mod tests {
         assert_eq!(decoded.len(), 1);
         assert_eq!(decoded[0].0.id, peer_id);
         assert_eq!(
-            decoded[0].1.assigned_models.first().map(String::as_str),
+            decoded[0].1.serving_models.first().map(String::as_str),
             Some("Qwen")
         );
         assert_eq!(decoded[0].1.mesh_id.as_deref(), Some("mesh-compat"));
@@ -827,7 +827,7 @@ mod tests {
             configured_models: vec!["v0-model".to_string()],
             vram_bytes: 8 * 1024 * 1024 * 1024,
             model_source: None,
-            assigned_models: vec!["v0-model".to_string()],
+            serving_models: vec!["v0-model".to_string()],
             hosted_models: Some(vec!["v0-model".to_string()]),
             catalog_models: vec![],
             desired_models: vec![],
@@ -858,7 +858,7 @@ mod tests {
             "decoded addr id must match remote_id"
         );
         assert_eq!(
-            decoded[0].1.assigned_models.first().map(String::as_str),
+            decoded[0].1.serving_models.first().map(String::as_str),
             Some("v0-model"),
             "serving model must round-trip correctly through JSON decode"
         );

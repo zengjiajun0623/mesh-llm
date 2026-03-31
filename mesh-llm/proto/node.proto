@@ -17,16 +17,16 @@ message PeerAnnouncement {
   optional string hostname = 6;
   optional bool is_soc = 7;
   optional string gpu_vram = 8;
-  repeated string available_models = 9;               // all models found on disk for mesh discovery
-  repeated string serving_models = 10;                // election / model-group membership
-  repeated string requested_models = 11;              // operator intent for what the mesh should serve
+  repeated string available_models = 9;
+  repeated string serving_models = 10;
+  repeated string requested_models = 11;
   repeated CompactModelMetadata available_model_metadata = 12;
   optional ExpertsSummary experts_summary = 13;
   optional uint32 rtt_ms = 14;
-  repeated string configured_models = 15;             // locally configured model set for this node
+  repeated string catalog_models = 15;              // GGUF model names (mesh catalog contribution; was JSON `models`)
   uint64 vram_bytes = 16;                            // GPU VRAM in bytes
   optional string model_source = 17;                 // how to obtain this node's model
-  reserved 18;
+  optional string primary_serving = 18;              // primary serving model (backward compat; was JSON `serving`)
   optional string mesh_id = 19;                      // stable mesh identity (self entry only)
   repeated ModelDemandEntry demand = 20;             // demand map entries (self entry only)
   map<string, uint64> available_model_sizes = 21;   // file sizes (bytes) per GGUF model name

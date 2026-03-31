@@ -221,8 +221,6 @@ fn display_runtime_state(value: &str) -> &'static str {
 fn display_backend_label(value: &str) -> &'static str {
     match value {
         "llama" => "Llama",
-        "mlx" => "MLX",
-        "vllm" => "vLLM",
         _ => "Unknown",
     }
 }

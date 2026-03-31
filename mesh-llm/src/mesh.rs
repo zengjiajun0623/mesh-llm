@@ -64,8 +64,8 @@ fn peer_info_to_mesh_peer(peer: &PeerInfo) -> crate::plugin::proto::MeshPeer {
         capabilities: Vec::new(),
         role: node_role_label(&peer.role),
         vram_bytes: peer.vram_bytes,
-        configured_models: peer.configured_models.clone(),
-        serving_models: peer.assigned_models.clone(),
+        models: peer.configured_models.clone(),
+        serving_models: peer.serving_models.clone(),
         available_models: peer.catalog_models.clone(),
         requested_models: peer.desired_models.clone(),
         rtt_ms: peer.rtt_ms,
@@ -82,7 +82,7 @@ fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool {
         || old.vram_bytes != new.vram_bytes
         || old.rtt_ms != new.rtt_ms
         || old.model_source != new.model_source
-        || old.assigned_models != new.assigned_models
+        || old.serving_models != new.serving_models
         || old.hosted_models_known != new.hosted_models_known
         || old.hosted_models != new.hosted_models
         || old.catalog_models != new.catalog_models
@@ -131,7 +131,7 @@ pub(crate) struct PeerAnnouncementV0 {
 
 impl PeerAnnouncementV0 {
     pub(crate) fn into_internal(self) -> PeerAnnouncement {
-        let assigned_models = if !self.serving_models.is_empty() {
+        let serving_models = if !self.serving_models.is_empty() {
             self.serving_models.clone()
         } else {
             self.serving.clone().into_iter().collect()
@@ -142,7 +142,7 @@ impl PeerAnnouncementV0 {
             configured_models: self.models,
             vram_bytes: self.vram_bytes,
             model_source: self.model_source,
-            assigned_models,
+            serving_models,
             hosted_models: None,
             catalog_models: self.available_models,
             desired_models: self.requested_models,
@@ -169,8 +169,8 @@ impl From<&PeerAnnouncement> for PeerAnnouncementV0 {
             models: ann.configured_models.clone(),
             vram_bytes: ann.vram_bytes,
             model_source: ann.model_source.clone(),
-            serving: ann.assigned_models.first().cloned(),
-            serving_models: ann.assigned_models.clone(),
+            serving: ann.serving_models.first().cloned(),
+            serving_models: ann.serving_models.clone(),
             available_models: ann.catalog_models.clone(),
             requested_models: ann.desired_models.clone(),
             version: ann.version.clone(),
@@ -192,10 +192,10 @@ fn apply_transitive_ann(
     ann: &PeerAnnouncement,
 ) -> bool {
     let ann_hosted_models = ann.hosted_models.clone().unwrap_or_default();
-    let serving_changed = existing.assigned_models != ann.assigned_models
+    let serving_changed = existing.serving_models != ann.serving_models
         || existing.hosted_models != ann_hosted_models
         || existing.hosted_models_known != ann.hosted_models.is_some();
-    existing.assigned_models = ann.assigned_models.clone();
+    existing.serving_models = ann.serving_models.clone();
     existing.hosted_models = ann_hosted_models;
     existing.hosted_models_known = ann.hosted_models.is_some();
     existing.role = ann.role.clone();
@@ -281,7 +281,7 @@ pub(crate) struct PeerAnnouncement {
     pub(crate) configured_models: Vec<String>,
     pub(crate) vram_bytes: u64,
     pub(crate) model_source: Option<String>,
-    pub(crate) assigned_models: Vec<String>,
+    pub(crate) serving_models: Vec<String>,
     pub(crate) hosted_models: Option<Vec<String>>,
     pub(crate) catalog_models: Vec<String>,
     pub(crate) desired_models: Vec<String>,
@@ -309,7 +309,7 @@ pub struct PeerInfo {
     pub rtt_ms: Option<u32>,
     pub model_source: Option<String>,
     /// All models assigned to this peer, even if not yet healthy.
-    pub assigned_models: Vec<String>,
+    pub serving_models: Vec<String>,
     /// Models this node is actively routing inference for.
     pub hosted_models: Vec<String>,
     /// True when this peer explicitly advertised `hosted_models`.
@@ -346,7 +346,7 @@ impl PeerInfo {
             vram_bytes: ann.vram_bytes,
             rtt_ms: None,
             model_source: ann.model_source.clone(),
-            assigned_models: ann.assigned_models.clone(),
+            serving_models: ann.serving_models.clone(),
             hosted_models: ann.hosted_models.clone().unwrap_or_default(),
             hosted_models_known: ann.hosted_models.is_some(),
             catalog_models: ann.catalog_models.clone(),
@@ -365,14 +365,14 @@ impl PeerInfo {
     }
 
     pub fn is_assigned_model(&self, model: &str) -> bool {
-        self.assigned_models.iter().any(|m| m == model)
+        self.serving_models.iter().any(|m| m == model)
     }
 
     pub fn routable_models(&self) -> Vec<String> {
         if self.hosted_models_known {
             self.hosted_models.clone()
         } else {
-            self.assigned_models.clone()
+            self.serving_models.clone()
         }
     }
 
@@ -717,7 +717,7 @@ pub struct Node {
     role: Arc<Mutex<NodeRole>>,
     configured_models: Arc<Mutex<Vec<String>>>,
     model_source: Arc<Mutex<Option<String>>>,
-    assigned_models: Arc<Mutex<Vec<String>>>,
+    serving_models: Arc<Mutex<Vec<String>>>,
     hosted_models: Arc<Mutex<Vec<String>>>,
     llama_ready: Arc<Mutex<bool>>,
     catalog_models: Arc<Mutex<Vec<String>>>,
@@ -1040,7 +1040,7 @@ impl Node {
             role: Arc::new(Mutex::new(role)),
             configured_models: Arc::new(Mutex::new(Vec::new())),
             model_source: Arc::new(Mutex::new(None)),
-            assigned_models: Arc::new(Mutex::new(Vec::new())),
+            serving_models: Arc::new(Mutex::new(Vec::new())),
             hosted_models: Arc::new(Mutex::new(Vec::new())),
             llama_ready: Arc::new(Mutex::new(false)),
             catalog_models: Arc::new(Mutex::new(Vec::new())),
@@ -1124,7 +1124,7 @@ impl Node {
             role: Arc::new(Mutex::new(role)),
             configured_models: Arc::new(Mutex::new(Vec::new())),
             model_source: Arc::new(Mutex::new(None)),
-            assigned_models: Arc::new(Mutex::new(Vec::new())),
+            serving_models: Arc::new(Mutex::new(Vec::new())),
             hosted_models: Arc::new(Mutex::new(Vec::new())),
             llama_ready: Arc::new(Mutex::new(false)),
             catalog_models: Arc::new(Mutex::new(Vec::new())),
@@ -1268,12 +1268,12 @@ impl Node {
         *self.model_source.lock().await = Some(source);
     }
 
-    pub async fn set_assigned_models(&self, models: Vec<String>) {
-        *self.assigned_models.lock().await = models;
+    pub async fn set_serving_models(&self, models: Vec<String>) {
+        *self.serving_models.lock().await = models;
     }
 
-    pub async fn assigned_models(&self) -> Vec<String> {
-        self.assigned_models.lock().await.clone()
+    pub async fn serving_models(&self) -> Vec<String> {
+        self.serving_models.lock().await.clone()
     }
 
     pub async fn set_hosted_models(&self, models: Vec<String>) {
@@ -2340,7 +2340,7 @@ impl Node {
         // Snapshot each lock independently to avoid holding multiple locks.
         let my_available = self.catalog_models.lock().await.clone();
         let my_requested = self.desired_models.lock().await.clone();
-        let my_assigned = self.assigned_models.lock().await.clone();
+        let my_serving = self.serving_models.lock().await.clone();
         let peer_data: Vec<_> = {
             let state = self.state.lock().await;
             state
@@ -2350,7 +2350,7 @@ impl Node {
                     (
                         p.catalog_models.clone(),
                         p.desired_models.clone(),
-                        p.assigned_models.clone(),
+                        p.serving_models.clone(),
                     )
                 })
                 .collect()
@@ -2362,7 +2362,7 @@ impl Node {
         for m in &my_requested {
             all.insert(m.clone());
         }
-        for m in &my_assigned {
+        for m in &my_serving {
             all.insert(m.clone());
         }
         for (avail, req, assigned) in &peer_data {
@@ -3448,7 +3448,7 @@ impl Node {
             let old_peer = existing.clone();
             let role_changed = existing.role != ann.role;
             let ann_hosted_models = ann.hosted_models.clone().unwrap_or_default();
-            let serving_changed = existing.assigned_models != ann.assigned_models
+            let serving_changed = existing.serving_models != ann.serving_models
                 || existing.hosted_models != ann_hosted_models
                 || existing.hosted_models_known != ann.hosted_models.is_some();
             if role_changed {
@@ -3469,7 +3469,7 @@ impl Node {
             if ann.model_source.is_some() {
                 existing.model_source = ann.model_source.clone();
             }
-            existing.assigned_models = ann.assigned_models.clone();
+            existing.serving_models = ann.serving_models.clone();
             existing.hosted_models = ann_hosted_models;
             existing.hosted_models_known = ann.hosted_models.is_some();
             existing.catalog_models = ann.catalog_models.clone();
@@ -3529,7 +3529,7 @@ impl Node {
             id.fmt_short(),
             ann.role,
             ann.vram_bytes as f64 / 1e9,
-            ann.assigned_models.first(),
+            ann.serving_models.first(),
             ann.catalog_models,
             state.peers.len() + 1
         );
@@ -3612,7 +3612,7 @@ impl Node {
         let my_role = self.role.lock().await.clone();
         let my_models = self.configured_models.lock().await.clone();
         let my_source = self.model_source.lock().await.clone();
-        let my_assigned_models = self.assigned_models.lock().await.clone();
+        let my_serving_models = self.serving_models.lock().await.clone();
         let my_hosted_models = self.hosted_models.lock().await.clone();
         let my_available = self.catalog_models.lock().await.clone();
         let my_requested = self.desired_models.lock().await.clone();
@@ -3634,7 +3634,7 @@ impl Node {
                     configured_models: p.configured_models.clone(),
                     vram_bytes: p.vram_bytes,
                     model_source: p.model_source.clone(),
-                    assigned_models: p.assigned_models.clone(),
+                    serving_models: p.serving_models.clone(),
                     hosted_models: p.hosted_models_known.then(|| p.hosted_models.clone()),
                     catalog_models: p.catalog_models.clone(),
                     desired_models: p.desired_models.clone(),
@@ -3658,7 +3658,7 @@ impl Node {
             configured_models: my_models,
             vram_bytes: self.vram_bytes,
             model_source: my_source,
-            assigned_models: my_assigned_models,
+            serving_models: my_serving_models,
             hosted_models: Some(my_hosted_models),
             catalog_models: my_available,
             desired_models: my_requested,
@@ -3734,7 +3734,7 @@ mod tests {
             role: Arc::new(Mutex::new(role)),
             configured_models: Arc::new(Mutex::new(Vec::new())),
             model_source: Arc::new(Mutex::new(None)),
-            assigned_models: Arc::new(Mutex::new(Vec::new())),
+            serving_models: Arc::new(Mutex::new(Vec::new())),
             hosted_models: Arc::new(Mutex::new(Vec::new())),
             llama_ready: Arc::new(Mutex::new(false)),
             catalog_models: Arc::new(Mutex::new(Vec::new())),
@@ -4211,7 +4211,7 @@ mod tests {
         let post_node = make_test_node(super::NodeRole::Host { http_port: 9337 }).await?;
         let post_id = post_node.id();
         post_node
-            .set_assigned_models(vec!["post-model".to_string()])
+            .set_serving_models(vec!["post-model".to_string()])
             .await;
         post_node
             .set_hosted_models(vec!["post-model".to_string()])
@@ -4399,7 +4399,7 @@ mod tests {
                 let peers = post_node.peers().await;
                 if peers.iter().any(|peer| {
                     peer.id == legacy_id
-                        && peer.assigned_models.first().map(String::as_str) == Some("legacy-model")
+                        && peer.serving_models.first().map(String::as_str) == Some("legacy-model")
                 }) {
                     break;
                 }
@@ -4474,7 +4474,7 @@ mod tests {
         assert_eq!(decoded.len(), 1);
         assert_eq!(decoded[0].0.id, peer_id);
         assert_eq!(
-            decoded[0].1.assigned_models.first().map(String::as_str),
+            decoded[0].1.serving_models.first().map(String::as_str),
             Some("Qwen")
         );
         assert_eq!(decoded[0].1.mesh_id.as_deref(), Some("mesh-compat"));
@@ -4518,7 +4518,7 @@ mod tests {
             vram_bytes: 0,
             rtt_ms: None,
             model_source: None,
-            assigned_models: vec![],
+            serving_models: vec![],
             hosted_models: vec![],
             hosted_models_known: false,
             catalog_models: vec![],
@@ -4819,7 +4819,7 @@ mod tests {
             configured_models: vec!["Qwen3-8B-Q4_K_M".to_string()],
             vram_bytes: 128 * 1024 * 1024 * 1024,
             model_source: Some("bartowski/Qwen3-8B-GGUF".to_string()),
-            assigned_models: vec!["Qwen3-8B-Q4_K_M".to_string()],
+            serving_models: vec!["Qwen3-8B-Q4_K_M".to_string()],
             hosted_models: Some(vec!["Qwen3-8B-Q4_K_M".to_string()]),
             catalog_models: vec!["Qwen3-8B-Q4_K_M".to_string()],
             desired_models: vec![],
@@ -5035,7 +5035,7 @@ mod tests {
             configured_models: vec!["NewModel-Q4_K_M".to_string()],
             vram_bytes: 8 * 1024 * 1024 * 1024,
             model_source: Some("new-source".to_string()),
-            assigned_models: vec!["NewModel-Q4_K_M".to_string()],
+            serving_models: vec!["NewModel-Q4_K_M".to_string()],
             hosted_models: Some(vec!["NewModel-Q4_K_M".to_string()]),
             catalog_models: vec!["NewModel-Q4_K_M".to_string()],
             desired_models: vec!["NewModel-Q4_K_M".to_string()],
@@ -5113,7 +5113,7 @@ mod tests {
             configured_models: vec!["SomeModel-Q4_K_M".to_string()],
             vram_bytes: 4 * 1024 * 1024 * 1024,
             model_source: None,
-            assigned_models: vec![],
+            serving_models: vec![],
             hosted_models: None,
             catalog_models: vec!["SomeModel-Q4_K_M".to_string()],
             desired_models: vec![],
@@ -5158,7 +5158,7 @@ mod tests {
             configured_models: vec!["SomeModel-Q4_K_M".to_string()],
             vram_bytes: 4 * 1024 * 1024 * 1024,
             model_source: None,
-            assigned_models: vec![],
+            serving_models: vec![],
             hosted_models: None,
             catalog_models: vec!["SomeModel-Q4_K_M".to_string()],
             desired_models: vec![],
