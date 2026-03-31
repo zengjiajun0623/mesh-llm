@@ -399,7 +399,7 @@ impl MeshApi {
         let catalog = node.mesh_catalog().await;
         let served = node.models_being_served().await;
         let active_demand = node.active_demand().await;
-        let my_assigned_models = node.serving_models().await;
+        let my_assigned_models = node.assigned_models().await;
         let my_hosted_models = node.hosted_models().await;
         let now_ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

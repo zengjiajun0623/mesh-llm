@@ -1011,7 +1011,7 @@ pub struct Node {
     models: Arc<Mutex<Vec<String>>>,
     model_source: Arc<Mutex<Option<String>>>,
     serving: Arc<Mutex<Option<String>>>,
-    serving_models: Arc<Mutex<Vec<String>>>,
+    assigned_models: Arc<Mutex<Vec<String>>>,
     hosted_models: Arc<Mutex<Vec<String>>>,
     llama_ready: Arc<Mutex<bool>>,
     available_models: Arc<Mutex<Vec<String>>>,
@@ -1501,7 +1501,7 @@ impl Node {
             models: Arc::new(Mutex::new(Vec::new())),
             model_source: Arc::new(Mutex::new(None)),
             serving: Arc::new(Mutex::new(None)),
-            serving_models: Arc::new(Mutex::new(Vec::new())),
+            assigned_models: Arc::new(Mutex::new(Vec::new())),
             hosted_models: Arc::new(Mutex::new(Vec::new())),
             llama_ready: Arc::new(Mutex::new(false)),
             available_models: Arc::new(Mutex::new(Vec::new())),
@@ -1586,7 +1586,8 @@ impl Node {
             models: Arc::new(Mutex::new(Vec::new())),
             model_source: Arc::new(Mutex::new(None)),
             serving: Arc::new(Mutex::new(None)),
-            serving_models: Arc::new(Mutex::new(Vec::new())),
+            assigned_models: Arc::new(Mutex::new(Vec::new())),
+            hosted_models: Arc::new(Mutex::new(Vec::new())),
             llama_ready: Arc::new(Mutex::new(false)),
             available_models: Arc::new(Mutex::new(Vec::new())),
             requested_models: Arc::new(Mutex::new(Vec::new())),
@@ -1633,6 +1634,27 @@ impl Node {
         }
         let json = serde_json::to_vec(&addr).expect("serializable");
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&json)
+    }
+
+    #[cfg(test)]
+    pub async fn sync_from_peer_for_tests(&self, remote: &Self) {
+        let remote_id = remote.endpoint.id();
+        let their_announcements = remote.collect_announcements().await;
+        for ann in &their_announcements {
+            if ann.addr.id == self.endpoint.id() {
+                continue;
+            }
+            if ann.addr.id == remote_id {
+                if let Some(ref their_id) = ann.mesh_id {
+                    self.set_mesh_id(their_id.clone()).await;
+                }
+                self.merge_remote_demand(&ann.model_demand);
+                self.add_peer(remote_id, ann.addr.clone(), ann).await;
+            } else {
+                self.update_transitive_peer(ann.addr.id, &ann.addr, ann)
+                    .await;
+            }
+        }
     }
 
     async fn build_mesh_event(
@@ -1708,14 +1730,14 @@ impl Node {
         *self.serving.lock().await = model;
     }
 
-    pub async fn set_serving_models(&self, models: Vec<String>) {
+    pub async fn set_assigned_models(&self, models: Vec<String>) {
         // Also keep `serving` in sync (primary = first model)
         *self.serving.lock().await = models.first().cloned();
-        *self.serving_models.lock().await = models;
+        *self.assigned_models.lock().await = models;
     }
 
-    pub async fn serving_models(&self) -> Vec<String> {
-        self.serving_models.lock().await.clone()
+    pub async fn assigned_models(&self) -> Vec<String> {
+        self.assigned_models.lock().await.clone()
     }
 
     pub async fn set_hosted_models(&self, models: Vec<String>) {
@@ -4138,7 +4160,7 @@ impl Node {
         let my_role = self.role.lock().await.clone();
         let my_models = self.models.lock().await.clone();
         let my_source = self.model_source.lock().await.clone();
-        let my_assigned_models = self.serving_models.lock().await.clone();
+        let my_assigned_models = self.assigned_models.lock().await.clone();
         let my_hosted_models = self.hosted_models.lock().await.clone();
         let my_available = self.available_models.lock().await.clone();
         let my_requested = self.requested_models.lock().await.clone();

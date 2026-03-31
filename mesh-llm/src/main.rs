@@ -407,28 +407,28 @@ async fn withdraw_advertised_model(node: &mesh::Node, model_name: &str) {
 }
 
 async fn add_serving_assignment(node: &mesh::Node, primary_model_name: &str, model_name: &str) {
-    let mut serving_models = node.serving_models().await;
-    if serving_models.iter().any(|m| m == model_name) {
+    let mut assigned_models = node.assigned_models().await;
+    if assigned_models.iter().any(|m| m == model_name) {
         return;
     }
-    serving_models.push(model_name.to_string());
-    serving_models.sort();
-    if let Some(pos) = serving_models.iter().position(|m| m == primary_model_name) {
-        let primary = serving_models.remove(pos);
-        serving_models.insert(0, primary);
+    assigned_models.push(model_name.to_string());
+    assigned_models.sort();
+    if let Some(pos) = assigned_models.iter().position(|m| m == primary_model_name) {
+        let primary = assigned_models.remove(pos);
+        assigned_models.insert(0, primary);
     }
-    node.set_serving_models(serving_models).await;
+    node.set_assigned_models(assigned_models).await;
     node.regossip().await;
 }
 
 async fn remove_serving_assignment(node: &mesh::Node, model_name: &str) {
-    let mut serving_models = node.serving_models().await;
-    let old_len = serving_models.len();
-    serving_models.retain(|m| m != model_name);
-    if serving_models.len() == old_len {
+    let mut assigned_models = node.assigned_models().await;
+    let old_len = assigned_models.len();
+    assigned_models.retain(|m| m != model_name);
+    if assigned_models.len() == old_len {
         return;
     }
-    node.set_serving_models(serving_models).await;
+    node.set_assigned_models(assigned_models).await;
     node.regossip().await;
 }
 
@@ -1684,7 +1684,7 @@ async fn run_auto(
     // Declare which models this node may serve, but do not advertise them as
     // live/routable until their local processes have passed health checks.
     let all_declared = build_serving_list(&resolved_models, &model_name);
-    node.set_serving_models(all_declared.clone()).await;
+    node.set_assigned_models(all_declared.clone()).await;
     node.set_hosted_models(Vec::new()).await;
     node.set_models(all_declared.clone()).await;
     let static_model_names = all_declared.clone();
@@ -3959,6 +3959,24 @@ mod tests {
         String::from_utf8(response).unwrap()
     }
 
+    async fn wait_for_condition<F, Fut>(timeout: Duration, mut check: F)
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = bool>,
+    {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if check().await {
+                return;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "timed out waiting for test condition"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     #[test]
     fn test_build_serving_list_auto_no_resolved() {
         // --auto: resolved_models is empty, model picked dynamically
@@ -4403,5 +4421,73 @@ mod tests {
             .unwrap();
 
         proxy_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_runtime_load_unload_regossips_across_nodes() {
+        let host = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+            .await
+            .unwrap();
+        let observer = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+            .await
+            .unwrap();
+
+        host.set_role(mesh::NodeRole::Host { http_port: 9337 })
+            .await;
+        host.set_assigned_models(vec!["Primary".into()]).await;
+        host.set_hosted_models(vec!["Primary".into()]).await;
+
+        observer.sync_from_peer_for_tests(&host).await;
+
+        wait_for_condition(Duration::from_secs(5), || {
+            let observer = observer.clone();
+            let host_id = host.id();
+            async move {
+                observer.peers().await.iter().any(|peer| {
+                    peer.id == host_id
+                        && peer.routes_model("Primary")
+                        && !peer.routes_model("Runtime")
+                })
+            }
+        })
+        .await;
+
+        add_serving_assignment(&host, "Primary", "Runtime").await;
+        advertise_model_ready(&host, "Primary", "Runtime").await;
+        observer.sync_from_peer_for_tests(&host).await;
+
+        wait_for_condition(Duration::from_secs(5), || {
+            let observer = observer.clone();
+            let host_id = host.id();
+            async move {
+                observer.peers().await.iter().any(|peer| {
+                    peer.id == host_id
+                        && peer.is_assigned_model("Runtime")
+                        && peer.routes_model("Runtime")
+                        && peer.routable_models()
+                            == vec!["Primary".to_string(), "Runtime".to_string()]
+                })
+            }
+        })
+        .await;
+
+        remove_serving_assignment(&host, "Runtime").await;
+        withdraw_advertised_model(&host, "Runtime").await;
+        observer.sync_from_peer_for_tests(&host).await;
+
+        wait_for_condition(Duration::from_secs(5), || {
+            let observer = observer.clone();
+            let host_id = host.id();
+            async move {
+                observer.peers().await.iter().any(|peer| {
+                    peer.id == host_id
+                        && peer.routes_model("Primary")
+                        && !peer.is_assigned_model("Runtime")
+                        && !peer.routes_model("Runtime")
+                        && peer.routable_models() == vec!["Primary".to_string()]
+                })
+            }
+        })
+        .await;
     }
 }
