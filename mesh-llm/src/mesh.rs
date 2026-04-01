@@ -2468,7 +2468,15 @@ impl Node {
             state
                 .peers
                 .values()
-                .map(|p| (p.requested_models.clone(), p.serving_models.clone()))
+                .map(|p| {
+                    let mut serving_models = p.serving_models.clone();
+                    if serving_models.is_empty() {
+                        if let Some(legacy_serving) = p.serving.clone() {
+                            serving_models.insert(legacy_serving);
+                        }
+                    }
+                    (p.requested_models.clone(), serving_models)
+                })
                 .collect()
         };
         let mut all = std::collections::HashSet::new();
