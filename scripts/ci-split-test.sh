@@ -204,9 +204,10 @@ done
 
 MODEL_NAME=$(basename "$MODEL" .gguf)
 
-# Wait until the client learns a routable Host for the requested model.
-# On macOS the peer list can arrive before the Host role/model gossip is visible,
-# which makes the first client requests race into a temporary 503 window.
+# Wait until the client learns a truly routable Host for the requested model.
+# `serving_models` is advertised before the host is actually ready to accept
+# inference traffic; `hosted_models` is the durable signal that the host has
+# made the model routable through its local API proxy.
 echo "Waiting for client to learn a routable host for ${MODEL_NAME}..."
 for i in $(seq 1 "$MAX_CLIENT_ROUTE_WAIT"); do
     STATUS=$(curl -sf "http://localhost:${C_CONSOLE_PORT}/api/status" 2>/dev/null || echo "")
@@ -216,8 +217,8 @@ import json, sys
 model = sys.argv[1]
 status = json.load(sys.stdin)
 for peer in status.get("peers", []):
-    serving_models = peer.get("serving_models", []) or []
-    if peer.get("role") == "Host" and (model in serving_models or peer.get("serving") == model):
+    hosted_models = peer.get("hosted_models", []) or []
+    if peer.get("role") == "Host" and model in hosted_models:
         print("1")
         break
 else:
@@ -244,6 +245,49 @@ else:
 
     sleep 1
 done
+
+# Wait for the host API itself to answer inference directly before using the
+# client proxy path. This avoids counting a normal election/bootstrap window as
+# a split-routing failure on slower runners.
+echo ""
+echo "Waiting for host API (port $HOST_API) to accept direct inference..."
+HOST_READY=""
+for i in $(seq 1 "$MAX_INFERENCE_ATTEMPTS"); do
+    HOST_RESPONSE=$(curl -s --max-time 30 -w "\n%{http_code}" "http://localhost:${HOST_API}/v1/chat/completions" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"model\": \"${MODEL_NAME}\",
+            \"messages\": [{\"role\": \"user\", \"content\": \"Say hi.\"}],
+            \"max_tokens\": 16,
+            \"temperature\": 0
+        }" 2>&1) || true
+
+    HOST_HTTP_CODE=$(echo "$HOST_RESPONSE" | tail -1)
+    HOST_BODY=$(echo "$HOST_RESPONSE" | sed '$d')
+
+    if [ "$HOST_HTTP_CODE" = "200" ]; then
+        HOST_READY=$(echo "$HOST_BODY" | python3 -c "import sys,json; r=json.load(sys.stdin); print(r['choices'][0]['message']['content'])" 2>/dev/null || echo "")
+        if [ -n "$HOST_READY" ]; then
+            echo "  ✅ Host direct inference ready in attempt $i: $HOST_READY"
+            break
+        fi
+    else
+        echo "  ⚠️  Host attempt $i: HTTP $HOST_HTTP_CODE (still starting)"
+    fi
+
+    if [ "$i" -lt "$MAX_INFERENCE_ATTEMPTS" ]; then
+        sleep 3
+    fi
+done
+
+if [ -z "$HOST_READY" ]; then
+    echo "❌ Host direct inference never became ready"
+    echo "  Last HTTP code: $HOST_HTTP_CODE"
+    echo "  Last body: $HOST_BODY"
+    echo "--- Host log tail ---"
+    tail -20 "$LOG_A" "$LOG_B" || true
+    exit 1
+fi
 
 # ── Verify topology from client's perspective ──
 echo ""
