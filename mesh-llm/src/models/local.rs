@@ -1,4 +1,4 @@
-use hf_hub::Cache;
+use hf_hub::{Cache, RepoType};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -79,26 +79,18 @@ pub fn legacy_models_present() -> bool {
 }
 
 pub fn huggingface_identity_for_path(path: &Path) -> Option<HuggingFaceModelIdentity> {
-    let cache_root = huggingface_hub_cache_dir();
-    let relative = path.strip_prefix(&cache_root).ok()?;
-    let mut parts = relative.iter();
-    let repo_dir = parts.next()?.to_str()?;
-    if !repo_dir.starts_with("models--") {
+    let cache = huggingface_hub_cache();
+    let info = cache.path_info(path)?;
+    if info.repo().repo_type() != RepoType::Model {
         return None;
     }
-    if parts.next()?.to_str()? != "snapshots" {
-        return None;
-    }
-    let revision = parts.next()?.to_str()?.to_string();
-    let file = parts
-        .map(|part| part.to_str())
-        .collect::<Option<Vec<_>>>()?
-        .join("/");
+    let revision = info.commit_hash().to_string();
+    let file = info.relative_path().to_string();
     if file.is_empty() {
         return None;
     }
 
-    let repo_id = repo_dir.trim_start_matches("models--").replace("--", "/");
+    let repo_id = info.repo().repo_id().to_string();
     let local_file_name = Path::new(&file)
         .file_name()
         .and_then(|value| value.to_str())
@@ -194,36 +186,28 @@ fn tree_contains_gguf(root: &Path) -> bool {
     false
 }
 
-fn scan_hf_cache_models(
-    root: &Path,
-    names: &mut Vec<String>,
-    seen: &mut HashSet<String>,
-    min_size_bytes: u64,
-) {
-    // `hf-hub` does not currently expose cached repo enumeration, so local
-    // discovery still walks the cache tree directly.
-    if let Ok(entries) = std::fs::read_dir(root) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) == Some("gguf") {
-                push_model_name(&path, names, seen, min_size_bytes);
-                continue;
-            }
-
-            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+fn scan_hf_cache_models(names: &mut Vec<String>, seen: &mut HashSet<String>, min_size_bytes: u64) {
+    let cache = huggingface_hub_cache();
+    let Ok(repos) = cache.repos() else {
+        return;
+    };
+    for repo in repos {
+        if repo.repo().repo_type() != RepoType::Model {
+            continue;
+        }
+        let Ok(refs) = repo.refs() else {
+            continue;
+        };
+        for cache_ref in refs {
+            let Ok(files) = repo.files(cache_ref.commit_hash()) else {
                 continue;
             };
-            if !name.starts_with("models--") {
-                continue;
-            }
-            let snapshots = path.join("snapshots");
-            if !snapshots.is_dir() {
-                continue;
-            }
-            if let Ok(snapshot_dirs) = std::fs::read_dir(&snapshots) {
-                for snapshot in snapshot_dirs.flatten() {
-                    scan_model_tree(&snapshot.path(), names, seen, min_size_bytes);
+            for file in files {
+                if !file.ends_with(".gguf") {
+                    continue;
                 }
+                let path = repo.pointer_path(cache_ref.commit_hash()).join(file);
+                push_model_name(&path, names, seen, min_size_bytes);
             }
         }
     }
@@ -259,7 +243,7 @@ fn scan_models_with_min_size(min_size_bytes: u64) -> Vec<String> {
     let mut seen = HashSet::new();
     let canonical_dir = huggingface_hub_cache_dir();
     if canonical_dir.exists() {
-        scan_hf_cache_models(&canonical_dir, &mut names, &mut seen, min_size_bytes);
+        scan_hf_cache_models(&mut names, &mut seen, min_size_bytes);
     }
     let legacy_dir = legacy_models_dir();
     if legacy_dir.exists() {
@@ -287,34 +271,28 @@ fn find_hf_cache_model_path(root: &Path, stem: &str) -> Option<PathBuf> {
     }
 
     let split_prefix = format!("{stem}-00001-of-");
-    // `hf-hub` can resolve individual files in known repos, but it does not
-    // expose a "find cached model by filename" API, so lookup stays local.
-    let Ok(entries) = std::fs::read_dir(root) else {
+    let cache = huggingface_hub_cache();
+    let Ok(repos) = cache.repos() else {
         return None;
     };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if let Some(name) = path.file_name().and_then(|value| value.to_str()) {
-            if name == filename {
-                return Some(path);
-            }
-            if name.starts_with(&split_prefix) && name.ends_with(".gguf") {
-                return Some(path);
-            }
-        }
-        let Some(dir_name) = path.file_name().and_then(|value| value.to_str()) else {
-            continue;
-        };
-        if !dir_name.starts_with("models--") {
+    for repo in repos {
+        if repo.repo().repo_type() != RepoType::Model {
             continue;
         }
-        let snapshots = path.join("snapshots");
-        let Ok(snapshot_dirs) = std::fs::read_dir(&snapshots) else {
+        let Ok(refs) = repo.refs() else {
             continue;
         };
-        for snapshot in snapshot_dirs.flatten() {
-            if let Some(found) = find_model_tree_path(&snapshot.path(), stem) {
-                return Some(found);
+        for cache_ref in refs {
+            let Ok(files) = repo.files(cache_ref.commit_hash()) else {
+                continue;
+            };
+            for file in files {
+                let Some(name) = Path::new(&file).file_name().and_then(|value| value.to_str()) else {
+                    continue;
+                };
+                if name == filename || (name.starts_with(&split_prefix) && name.ends_with(".gguf")) {
+                    return Some(repo.pointer_path(cache_ref.commit_hash()).join(file));
+                }
             }
         }
     }
