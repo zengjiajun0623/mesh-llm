@@ -67,7 +67,7 @@ fn mmproj_path_for_model(model_name: &str) -> Option<PathBuf> {
     catalog::MODEL_CATALOG
         .iter()
         .find(|m| {
-            m.name == model_name || m.file.strip_suffix(".gguf").unwrap_or(m.file) == model_name
+            m.name == model_name || m.file.strip_suffix(".gguf").unwrap_or(&m.file) == model_name
         })
         .and_then(|m| m.mmproj.as_ref())
         .map(|asset| catalog::models_dir().join(&asset.file))
@@ -1814,7 +1814,7 @@ async fn run_auto(
 
                             add_runtime_local_target(&target_tx, &loaded_name, handle.port);
                             advertise_model_ready(&node, &primary_model_name, &loaded_name).await;
-                            node.set_available_models(mesh::scan_local_models()).await;
+                            node.set_available_models(models::scan_local_models()).await;
                             if let Some(ref cs) = console_state {
                                 cs.upsert_local_process(local_process_payload(
                                     &loaded_name,

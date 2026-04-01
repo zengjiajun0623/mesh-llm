@@ -5137,8 +5137,6 @@ mod tests {
             is_soc: None,
             gpu_vram: None,
             gpu_bandwidth_gbps: None,
-            available_model_metadata: vec![],
-            experts_summary: None,
             available_model_sizes: HashMap::new(),
         };
 
@@ -5182,8 +5180,6 @@ mod tests {
             is_soc: None,
             gpu_vram: None,
             gpu_bandwidth_gbps: None,
-            available_model_metadata: vec![],
-            experts_summary: None,
             available_model_sizes: HashMap::new(),
         };
         apply_transitive_ann(&mut existing, &richer_addr, &ann2);
@@ -6149,7 +6145,7 @@ mod tests {
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn v0_peer_tunnel_map_exchange_over_legacy_connection() -> Result<()> {
-        use iroh::endpoint::QuicTransportConfig;
+        use iroh::endpoint::{ConnectOptions, QuicTransportConfig};
 
         let post_node = make_test_node(super::NodeRole::Host { http_port: 9337 }).await?;
         post_node
@@ -6199,8 +6195,6 @@ mod tests {
             is_soc: None,
             gpu_vram: None,
             gpu_bandwidth_gbps: None,
-            available_model_metadata: vec![],
-            experts_summary: None,
             available_model_sizes: HashMap::new(),
         };
 
@@ -6385,8 +6379,6 @@ mod tests {
             is_soc: None,
             gpu_vram: None,
             gpu_bandwidth_gbps: None,
-            available_model_metadata: vec![],
-            experts_summary: None,
             available_model_sizes: HashMap::new(),
         };
 
@@ -6593,8 +6585,6 @@ mod tests {
             is_soc: None,
             gpu_vram: None,
             gpu_bandwidth_gbps: None,
-            available_model_metadata: vec![],
-            experts_summary: None,
             available_model_sizes: HashMap::new(),
         };
         let v0_gossip_json =
@@ -6667,7 +6657,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn protocol_negotiation_edge_cases() -> Result<()> {
-        use iroh::endpoint::QuicTransportConfig;
+        use iroh::endpoint::{ConnectOptions, QuicTransportConfig};
 
         assert_eq!(
             protocol_from_alpn(b""),
