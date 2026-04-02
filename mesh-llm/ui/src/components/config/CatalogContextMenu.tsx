@@ -85,15 +85,18 @@ export function CatalogContextMenu({
         ) : (
           assignTargets.map((target) => {
             const alreadyAssigned = target.assignedModelNames.has(model.name);
+            const notAvailable = !model.nodeIds.includes(target.id);
             const vramCheck = checkVramFit(target.vramBytes, model.sizeBytes, target.assignedBytes);
             const noFit = !vramCheck.fits;
 
-            const disabled = alreadyAssigned || noFit;
+            const disabled = alreadyAssigned || notAvailable || noFit;
             const disabledReason = alreadyAssigned
               ? 'Already assigned to this node.'
-              : noFit
-                ? 'Not enough VRAM to fit this model.'
-                : null;
+              : notAvailable
+                ? 'Model not available on this node.'
+                : noFit
+                  ? 'Not enough VRAM to fit this model.'
+                  : null;
 
             return (
               <NodeMenuItem

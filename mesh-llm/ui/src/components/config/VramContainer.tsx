@@ -276,7 +276,14 @@ export function VramContainer({
   });
   const { source } = useDragOperation();
 
-  const containerRef = useRef<HTMLDivElement>(null);
+  const containerRef: React.MutableRefObject<HTMLDivElement | null> = useRef(null);
+  const mergedContainerRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      ref(el);
+      containerRef.current = el;
+    },
+    [ref],
+  );
   const [contextMenu, setContextMenu] = useState<{ position: ContextMenuPosition; assignment: VramAssignment } | null>(null);
   const [resizePreview, setResizePreview] = useState<ResizePreview>(null);
   const selectedAssignmentIdSet = useMemo(
@@ -367,7 +374,7 @@ export function VramContainer({
   return (
     <TooltipProvider>
       <section
-        ref={containerRef}
+        ref={mergedContainerRef}
         data-testid="vram-container"
         className={cn(
           'space-y-2',

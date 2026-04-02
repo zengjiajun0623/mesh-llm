@@ -32,7 +32,6 @@ export function TomlEditor({
 }: TomlEditorProps) {
   const [tomlText, setTomlText] = useState<string>(() => serializeConfig(config));
   const [parseError, setParseError] = useState<string | null>(null);
-  const [isEditing, setIsEditing] = useState(false);
 
   // Break feedback-loop: 'toml' = TOML side just dispatched; skip next config effect
   const syncSource = useRef<'toml' | null>(null);
@@ -179,10 +178,7 @@ export function TomlEditor({
             ref={highlightDivRef}
             data-testid="toml-highlight"
             aria-hidden
-            className={cn(
-              'absolute inset-0 pointer-events-none overflow-auto [&_pre]:m-0 [&_pre]:font-mono [&_pre]:text-[13px] [&_pre]:leading-[1.5]',
-              isEditing && 'opacity-0',
-            )}
+            className="absolute inset-0 pointer-events-none overflow-auto [&_pre]:m-0 [&_pre]:font-mono [&_pre]:text-[13px] [&_pre]:leading-[1.5] [&_pre]:p-[12px] [&_pre]:whitespace-pre-wrap [&_pre]:[overflow-wrap:anywhere] [&_pre]:bg-transparent"
             style={{ scrollbarWidth: 'none' }}
           >
             <pre
@@ -210,8 +206,6 @@ export function TomlEditor({
             value={tomlText}
             onChange={handleTextareaChange}
             onScroll={handleScroll}
-            onFocus={() => setIsEditing(true)}
-            onBlur={() => setIsEditing(false)}
             spellCheck={false}
             autoCapitalize="off"
             autoCorrect="off"
@@ -221,8 +215,8 @@ export function TomlEditor({
               fontSize: EDITOR_FONT_SIZE,
               lineHeight: EDITOR_LINE_HEIGHT,
               padding: EDITOR_PADDING,
-              color: isEditing ? 'hsl(var(--foreground))' : 'transparent',
-              WebkitTextFillColor: isEditing ? 'hsl(var(--foreground))' : 'transparent',
+              color: 'transparent',
+              WebkitTextFillColor: 'transparent',
               caretColor: 'hsl(var(--foreground))',
             }}
           />
