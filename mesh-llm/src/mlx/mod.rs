@@ -10,5 +10,5 @@
 pub mod model;
 pub mod server;
 
-pub use model::is_mlx_model_dir;
+pub use model::{is_mlx_model_dir, mlx_model_dir};
 pub use server::start_mlx_server;

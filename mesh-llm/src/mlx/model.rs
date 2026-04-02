@@ -6,7 +6,10 @@
 use anyhow::{bail, Context, Result};
 use mlx_rs::ops::indexing::{IndexOp, TryIndexMutOp};
 use mlx_rs::Array;
+use serde_json::Value;
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 
 #[derive(Debug, serde::Deserialize)]
@@ -571,15 +574,172 @@ fn load_all_safetensors(dir: &Path) -> Result<HashMap<String, Array>> {
     }
 }
 
-/// Check if a directory looks like an MLX safetensors model.
-pub fn is_mlx_model_dir(path: &Path) -> bool {
-    if !path.is_dir() {
-        return false;
+fn normalize_model_dir(path: &Path) -> Option<&Path> {
+    if path.is_dir() {
+        return Some(path);
     }
-    let has_config = path.join("config.json").exists();
+    let name = path.file_name()?.to_str()?;
+    match name {
+        "config.json"
+        | "tokenizer.json"
+        | "tokenizer_config.json"
+        | "model.safetensors"
+        | "model.safetensors.index.json" => path.parent(),
+        _ => None,
+    }
+}
+
+fn has_required_model_files(dir: &Path) -> bool {
+    let has_config = dir.join("config.json").exists();
     let has_tokenizer =
-        path.join("tokenizer_config.json").exists() || path.join("tokenizer.json").exists();
-    let has_weights = path.join("model.safetensors").exists()
-        || path.join("model.safetensors.index.json").exists();
+        dir.join("tokenizer_config.json").exists() || dir.join("tokenizer.json").exists();
+    let has_weights =
+        dir.join("model.safetensors").exists() || dir.join("model.safetensors.index.json").exists();
     has_config && has_tokenizer && has_weights
+}
+
+fn config_supports_mlx(config: &Value) -> bool {
+    let architectures = config
+        .get("architectures")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|value| value.as_str());
+    let model_type = config.get("model_type").and_then(|value| value.as_str());
+
+    architectures.chain(model_type).any(|name| {
+        let name = name.to_ascii_lowercase();
+        matches!(
+            name.as_str(),
+            "llama"
+                | "qwen2"
+                | "qwen3"
+                | "llamaforcausallm"
+                | "qwen2forcausallm"
+                | "qwen3forcausallm"
+        )
+    })
+}
+
+fn read_model_config(dir: &Path) -> Option<Value> {
+    let text = std::fs::read_to_string(dir.join("config.json")).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn detect_architecture_from_safetensors_header(dir: &Path) -> Option<String> {
+    let path = if dir.join("model.safetensors").exists() {
+        dir.join("model.safetensors")
+    } else {
+        let text = std::fs::read_to_string(dir.join("model.safetensors.index.json")).ok()?;
+        let index: Value = serde_json::from_str(&text).ok()?;
+        let file = index
+            .get("weight_map")
+            .and_then(|value| value.as_object())?
+            .values()
+            .find_map(|value| value.as_str())?;
+        dir.join(file)
+    };
+
+    let mut file = File::open(path).ok()?;
+    let mut len_bytes = [0u8; 8];
+    file.read_exact(&mut len_bytes).ok()?;
+    let header_len = u64::from_le_bytes(len_bytes) as usize;
+    if header_len == 0 || header_len > 16 * 1024 * 1024 {
+        return None;
+    }
+    let mut header = vec![0u8; header_len];
+    file.read_exact(&mut header).ok()?;
+    let json: Value = serde_json::from_slice(&header).ok()?;
+    let map = json.as_object()?;
+
+    let keys: Vec<&str> = map
+        .keys()
+        .filter(|key| key.as_str() != "__metadata__")
+        .map(|key| key.as_str())
+        .collect();
+
+    if keys.iter().any(|key| key.starts_with("model.layers."))
+        && keys
+            .iter()
+            .any(|key| key.starts_with("model.embed_tokens."))
+        && keys
+            .iter()
+            .any(|key| key.contains(".self_attn.q_proj.") || key.contains(".self_attn.q_proj"))
+    {
+        return Some("llama_like".to_string());
+    }
+
+    None
+}
+
+pub fn mlx_model_dir(path: &Path) -> Option<&Path> {
+    let dir = normalize_model_dir(path)?;
+    if has_required_model_files(dir) {
+        Some(dir)
+    } else {
+        None
+    }
+}
+
+/// Check whether a path resolves to a supported MLX safetensors model.
+///
+/// Prefers explicit config metadata and only falls back to safetensors-header
+/// inspection when the config does not identify the architecture.
+pub fn is_mlx_model_dir(path: &Path) -> bool {
+    let Some(dir) = mlx_model_dir(path) else {
+        return false;
+    };
+
+    if let Some(config) = read_model_config(dir) {
+        if config_supports_mlx(&config) {
+            return true;
+        }
+    }
+
+    detect_architecture_from_safetensors_header(dir).is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mlx_model_dir_accepts_directory_and_known_files() {
+        let root = std::env::temp_dir().join(format!("mesh-llm-mlx-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("config.json"), "{}").unwrap();
+        std::fs::write(root.join("tokenizer.json"), "{}").unwrap();
+        std::fs::write(root.join("model.safetensors"), b"12345678").unwrap();
+
+        assert_eq!(mlx_model_dir(&root), Some(root.as_path()));
+        assert_eq!(
+            mlx_model_dir(&root.join("config.json")),
+            Some(root.as_path())
+        );
+        assert_eq!(
+            mlx_model_dir(&root.join("model.safetensors")),
+            Some(root.as_path())
+        );
+    }
+
+    #[test]
+    fn config_supports_known_mlx_architectures() {
+        let qwen: Value = serde_json::json!({
+            "model_type": "qwen2",
+            "architectures": ["Qwen2ForCausalLM"]
+        });
+        let llama: Value = serde_json::json!({
+            "model_type": "llama",
+            "architectures": ["LlamaForCausalLM"]
+        });
+        let unsupported: Value = serde_json::json!({
+            "model_type": "gemma3",
+            "architectures": ["Gemma3ForConditionalGeneration"]
+        });
+
+        assert!(config_supports_mlx(&qwen));
+        assert!(config_supports_mlx(&llama));
+        assert!(!config_supports_mlx(&unsupported));
+    }
 }

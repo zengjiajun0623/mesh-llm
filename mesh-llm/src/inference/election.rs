@@ -1079,6 +1079,8 @@ async fn start_llama(
     // ── MLX native backend: if model is a safetensors directory, run in-process ──
     #[cfg(target_os = "macos")]
     if crate::mlx::is_mlx_model_dir(model) {
+        let dir = crate::mlx::mlx_model_dir(model)
+            .expect("mlx path should normalize after compatibility check");
         let llama_port = match find_free_port().await {
             Ok(p) => p,
             Err(e) => {
@@ -1087,7 +1089,7 @@ async fn start_llama(
             }
         };
         eprintln!("🍎 MLX native backend: loading {model_name}...");
-        match crate::mlx::start_mlx_server(model, model_name.to_string(), llama_port).await {
+        match crate::mlx::start_mlx_server(dir, model_name.to_string(), llama_port).await {
             Ok(process) => {
                 eprintln!("✅ MLX server ready on port {llama_port}");
                 return Some((llama_port, process));

@@ -254,19 +254,36 @@ pub(crate) async fn run() -> Result<()> {
     }
 
     // --- Validation ---
-    if cli.client && (!cli.model.is_empty() || !cli.gguf.is_empty()) {
+    if cli.client
+        && (!cli.model.is_empty() || !cli.gguf_file.is_empty() || !cli.mlx_file.is_empty())
+    {
         anyhow::bail!("--client and --model are mutually exclusive");
     }
     // --- Resolve models from CLI ---
     // All --model entries get resolved/downloaded. First is primary (gets rpc/tunnel).
     // Additional models run as solo llama-servers (must fit in VRAM independently).
-    // --gguf entries are explicit raw-file escapes and must already exist on disk.
+    // --gguf-file entries are explicit raw-file escapes and must already exist on disk.
     let mut resolved_models: Vec<PathBuf> = Vec::new();
-    for path in &cli.gguf {
+    for path in &cli.gguf_file {
         if !path.exists() {
             anyhow::bail!("GGUF file not found: {}", path.display());
         }
         resolved_models.push(path.clone());
+    }
+    for path in &cli.mlx_file {
+        let Some(dir) = crate::mlx::mlx_model_dir(path) else {
+            anyhow::bail!(
+                "MLX model path must point to a compatible model directory or a file inside one: {}",
+                path.display()
+            );
+        };
+        if !crate::mlx::is_mlx_model_dir(dir) {
+            anyhow::bail!(
+                "MLX model path is not a supported MLX model: {}",
+                path.display()
+            );
+        }
+        resolved_models.push(dir.to_path_buf());
     }
     for m in &cli.model {
         resolved_models.push(resolve_model(m).await?);
@@ -278,11 +295,7 @@ pub(crate) async fn run() -> Result<()> {
     // Strip split GGUF suffix so "MiniMax-M2.5-Q4_K_M-00001-of-00004" → "MiniMax-M2.5-Q4_K_M"
     let requested_model_names: Vec<String> = resolved_models
         .iter()
-        .filter_map(|m| {
-            m.file_stem()
-                .and_then(|s| s.to_str())
-                .map(|s| router::strip_split_suffix_owned(s))
-        })
+        .map(|m| resolved_model_name(m))
         .collect();
 
     let bin_dir = match &cli.bin_dir {
@@ -1088,19 +1101,15 @@ async fn run_auto(
         }
     };
 
-    let model_name = {
-        let stem = model
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        // Strip split GGUF suffix: "MiniMax-M2.5-Q4_K_M-00001-of-00004" → "MiniMax-M2.5-Q4_K_M"
-        router::strip_split_suffix_owned(&stem)
-    };
+    let model_name = resolved_model_name(&model);
 
     // Set model source for gossip (so other joiners can discover it too)
     let model_source = if !cli.model.is_empty() {
         cli.model[0].to_string_lossy().to_string()
+    } else if !cli.mlx_file.is_empty() {
+        cli.mlx_file[0].to_string_lossy().to_string()
+    } else if !cli.gguf_file.is_empty() {
+        cli.gguf_file[0].to_string_lossy().to_string()
     } else {
         model_name.clone()
     };
@@ -1346,25 +1355,13 @@ async fn run_auto(
         // Announce all models to mesh
         let all_names: Vec<String> = resolved_models
             .iter()
-            .map(|m| {
-                m.file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string()
-            })
+            .map(|m| resolved_model_name(m))
             .collect();
         node.set_models(all_names).await;
         node.regossip().await;
 
         for extra_model in resolved_models.iter().skip(1) {
-            let extra_name = {
-                let stem = extra_model
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                router::strip_split_suffix_owned(&stem)
-            };
+            let extra_name = resolved_model_name(extra_model);
             let extra_node = node.clone();
             let extra_tunnel = tunnel_mgr.clone();
             let extra_bin = bin_dir.clone();
@@ -1916,15 +1913,7 @@ fn build_serving_list(resolved_models: &[PathBuf], model_name: &str) -> Vec<Stri
     let clean_name = router::strip_split_suffix_owned(model_name);
     let mut all: Vec<String> = resolved_models
         .iter()
-        .map(|m| {
-            let stem = m
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            // Strip split GGUF suffix: "Model-00001-of-00004" → "Model"
-            router::strip_split_suffix_owned(&stem)
-        })
+        .map(|m| resolved_model_name(m))
         .collect();
     if !all.contains(&clean_name) {
         all.insert(0, clean_name);

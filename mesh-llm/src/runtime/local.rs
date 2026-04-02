@@ -24,6 +24,20 @@ pub(super) struct ManagedModelController {
 }
 
 pub(super) fn resolved_model_name(path: &Path) -> String {
+    #[cfg(target_os = "macos")]
+    if let Some(dir) = crate::mlx::mlx_model_dir(path) {
+        if let Some(identity) =
+            crate::models::huggingface_identity_for_path(&dir.join("config.json"))
+        {
+            if let Some(name) = identity.repo_id.rsplit('/').next() {
+                return name.to_string();
+            }
+        }
+        if let Some(name) = dir.file_name().and_then(|value| value.to_str()) {
+            return name.to_string();
+        }
+    }
+
     let stem = path
         .file_stem()
         .unwrap_or_default()
@@ -164,7 +178,9 @@ pub(super) async fn start_runtime_local_model(
     let mmproj_path = mmproj_path_for_model(&model_name);
     #[cfg(target_os = "macos")]
     let mlx_process = if crate::mlx::is_mlx_model_dir(model_path) {
-        Some(crate::mlx::start_mlx_server(model_path, model_name.clone(), port).await?)
+        let dir = crate::mlx::mlx_model_dir(model_path)
+            .expect("mlx path should normalize after compatibility check");
+        Some(crate::mlx::start_mlx_server(dir, model_name.clone(), port).await?)
     } else {
         None
     };

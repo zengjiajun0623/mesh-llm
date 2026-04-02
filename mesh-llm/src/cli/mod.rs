@@ -39,8 +39,15 @@ pub(crate) struct Cli {
     pub(crate) model: Vec<PathBuf>,
 
     /// Raw local GGUF file to serve directly (repeatable).
-    #[arg(long)]
-    pub(crate) gguf: Vec<PathBuf>,
+    #[arg(long = "gguf-file", visible_alias = "gguf")]
+    pub(crate) gguf_file: Vec<PathBuf>,
+
+    /// Raw local MLX model path to serve directly (repeatable).
+    ///
+    /// Accepts a model directory or a file inside one, such as
+    /// `config.json`, `tokenizer.json`, or `model.safetensors`.
+    #[arg(long = "mlx-file", visible_alias = "mlx")]
+    pub(crate) mlx_file: Vec<PathBuf>,
 
     /// API port (default: 9337).
     #[arg(long, default_value = "9337")]
