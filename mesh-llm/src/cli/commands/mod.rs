@@ -1,3 +1,4 @@
+mod benchmark;
 mod blackboard;
 mod discover;
 mod download;
@@ -8,6 +9,7 @@ mod runtime;
 
 use anyhow::Result;
 
+use crate::cli::commands::benchmark::dispatch_benchmark_command;
 use crate::cli::commands::blackboard::{install_skill, run_blackboard};
 use crate::cli::commands::discover::{run_discover, run_stop};
 use crate::cli::commands::download::dispatch_download_command;
@@ -80,6 +82,7 @@ pub(crate) async fn dispatch(cli: &Cli) -> Result<bool> {
             }
         }
         Command::Plugin { command } => run_plugin_command(command, cli).await,
+        Command::Benchmark { command } => dispatch_benchmark_command(command).await,
     }?;
     Ok(true)
 }

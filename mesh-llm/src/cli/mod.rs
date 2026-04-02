@@ -1,8 +1,11 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+use crate::cli::benchmark::BenchmarkCommand;
 use crate::cli::runtime::RuntimeCommand;
+use crate::inference::moe;
 
+pub(crate) mod benchmark;
 pub(crate) mod commands;
 pub mod models;
 pub(crate) mod runtime;
@@ -34,7 +37,7 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub(crate) auto: bool,
 
-    /// Model to serve (path, catalog name, or HuggingFace URL).
+    /// Model to serve (path, catalog name, HF exact ref, or HuggingFace URL).
     #[arg(long)]
     pub(crate) model: Vec<PathBuf>,
 
@@ -98,6 +101,38 @@ pub(crate) struct Cli {
     /// Force tensor split even if the model fits on one node.
     #[arg(long, hide = true)]
     pub(crate) split: bool,
+
+    /// MoE ranking strategy for split MoE models. `auto` keeps current behavior; `micro-analyze`
+    /// runs a short local `llama-moe-analyze`; `analyze` runs the full analysis before splitting.
+    #[arg(long, value_enum)]
+    pub(crate) moe_ranking: Option<moe::MoeRankingStrategy>,
+
+    /// MoE grouping strategy for split MoE models. `shared-core` preserves the current
+    /// replicated-hot-core split; `snake-draft` balances hot and cold experts across nodes.
+    #[arg(long, value_enum)]
+    pub(crate) moe_grouping: Option<moe::MoeGroupingStrategy>,
+
+    /// Overlap factor for `--moe-grouping shared-core`. `1` keeps each non-shared expert on one
+    /// node; larger values add redundancy.
+    #[arg(long)]
+    pub(crate) moe_overlap: Option<usize>,
+
+    /// Replicate the hottest N experts to every shard when using `--moe-grouping snake-draft`.
+    /// Defaults to the model's `min_experts_per_node`.
+    #[arg(long)]
+    pub(crate) moe_replicate: Option<u32>,
+
+    /// Number of short prompts to aggregate when `--moe-ranking micro-analyze` is selected.
+    #[arg(long)]
+    pub(crate) moe_micro_prompt_count: Option<usize>,
+
+    /// Decode budget per prompt for `--moe-ranking micro-analyze`.
+    #[arg(long)]
+    pub(crate) moe_micro_tokens: Option<u32>,
+
+    /// Which MoE layers to log for `--moe-ranking micro-analyze`.
+    #[arg(long, value_enum)]
+    pub(crate) moe_micro_layers: Option<moe::MoeMicroLayerScope>,
 
     /// Override context size (tokens). Default: auto-scaled to available VRAM.
     #[arg(long, hide = true)]
@@ -289,6 +324,11 @@ pub(crate) enum Command {
     Plugin {
         #[command(subcommand)]
         command: PluginCommand,
+    },
+    /// Benchmark and compare model/runtime strategies.
+    Benchmark {
+        #[command(subcommand)]
+        command: BenchmarkCommand,
     },
 }
 

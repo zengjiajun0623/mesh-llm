@@ -12,6 +12,7 @@ use crate::network::tunnel;
 use mesh::NodeRole;
 use std::collections::HashMap;
 use std::path::Path;
+use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::watch;
@@ -195,6 +196,15 @@ pub fn build_moe_targets(
     targets
 }
 
+#[derive(Clone, Debug)]
+struct ResolvedMoeConfig {
+    config: crate::models::catalog::MoeConfig,
+    ranking_source: String,
+    grouping_strategy: moe::MoeGroupingStrategy,
+    overlap: usize,
+    replicate: u32,
+}
+
 /// Look up MoE config for a model. Two tiers:
 /// 1. Catalog (has pre-computed ranking) — instant, optimal
 /// 2. GGUF header detection (no ranking) — uses conservative defaults
@@ -250,6 +260,296 @@ fn lookup_moe_config(
     })
 }
 
+fn bundled_moe_config(model_name: &str) -> Option<crate::models::catalog::MoeConfig> {
+    let q = model_name.to_lowercase();
+    crate::models::catalog::MODEL_CATALOG
+        .iter()
+        .find(|m| m.name.to_lowercase() == q || m.file.to_lowercase().contains(&q))
+        .and_then(|m| m.moe.clone())
+}
+
+fn resolve_runtime_moe_config(
+    model_name: &str,
+    model_path: &Path,
+    bin_dir: &Path,
+    options: &moe::MoeRuntimeOptions,
+) -> anyhow::Result<Option<ResolvedMoeConfig>> {
+    let base = match lookup_moe_config(model_name, model_path) {
+        Some(cfg) => cfg,
+        None => return Ok(None),
+    };
+
+    let started = std::time::Instant::now();
+    let (ranking, ranking_source) = match options.ranking_strategy {
+        moe::MoeRankingStrategy::Auto => {
+            if let Some(cfg) = bundled_moe_config(model_name) {
+                if !cfg.ranking.is_empty() {
+                    (cfg.ranking, "bundled-catalog-ranking".to_string())
+                } else {
+                    let cached = moe::ranking_cache_path(model_path);
+                    if let Some(ranking) = moe::load_cached_ranking(&cached) {
+                        (ranking, cached.display().to_string())
+                    } else {
+                        (
+                            (0..base.n_expert).collect(),
+                            "sequential-fallback".to_string(),
+                        )
+                    }
+                }
+            } else {
+                let cached = moe::ranking_cache_path(model_path);
+                if let Some(ranking) = moe::load_cached_ranking(&cached) {
+                    (ranking, cached.display().to_string())
+                } else {
+                    (
+                        (0..base.n_expert).collect(),
+                        "sequential-fallback".to_string(),
+                    )
+                }
+            }
+        }
+        moe::MoeRankingStrategy::Analyze => {
+            let cached = moe::ranking_cache_path(model_path);
+            let ranking = ensure_full_analyze_ranking(bin_dir, model_path, &cached)?;
+            (ranking, cached.display().to_string())
+        }
+        moe::MoeRankingStrategy::MicroAnalyze => {
+            let ranking = run_micro_analyze_ranking(bin_dir, model_path, options)?;
+            let source = format!(
+                "micro-analyze:p{}:t{}:{}",
+                options.micro_prompt_count,
+                options.micro_tokens,
+                match options.micro_layer_scope {
+                    moe::MoeMicroLayerScope::All => "all-layers",
+                    moe::MoeMicroLayerScope::First => "first-layer",
+                }
+            );
+            (ranking, source)
+        }
+        moe::MoeRankingStrategy::Sequential => (
+            (0..base.n_expert).collect(),
+            "sequential-fallback".to_string(),
+        ),
+        moe::MoeRankingStrategy::HeuristicMean => resolve_heuristic_runtime_ranking(
+            model_path,
+            base.n_expert,
+            moe::HeuristicScoreMethod::MeanL2,
+        )?,
+        moe::MoeRankingStrategy::HeuristicMax => resolve_heuristic_runtime_ranking(
+            model_path,
+            base.n_expert,
+            moe::HeuristicScoreMethod::MaxL2,
+        )?,
+        moe::MoeRankingStrategy::HeuristicMeanPlusStd => resolve_heuristic_runtime_ranking(
+            model_path,
+            base.n_expert,
+            moe::HeuristicScoreMethod::MeanPlusStd,
+        )?,
+        moe::MoeRankingStrategy::HeuristicArch => resolve_heuristic_runtime_ranking(
+            model_path,
+            base.n_expert,
+            moe::HeuristicScoreMethod::ArchitectureAware,
+        )?,
+    };
+
+    eprintln!(
+        "🧩 [{}] MoE ranking={} grouping={} resolved in {:.1}s",
+        model_name,
+        ranking_source,
+        match options.grouping_strategy {
+            moe::MoeGroupingStrategy::SharedCore => "shared-core",
+            moe::MoeGroupingStrategy::SnakeDraft => "snake-draft",
+        },
+        started.elapsed().as_secs_f64()
+    );
+
+    Ok(Some(ResolvedMoeConfig {
+        config: crate::models::catalog::MoeConfig { ranking, ..base },
+        ranking_source,
+        grouping_strategy: options.grouping_strategy,
+        overlap: options.overlap.max(1),
+        replicate: options.replicate.unwrap_or(base.min_experts_per_node),
+    }))
+}
+
+fn resolve_heuristic_runtime_ranking(
+    model_path: &Path,
+    expert_count: u32,
+    method: moe::HeuristicScoreMethod,
+) -> anyhow::Result<(Vec<u32>, String)> {
+    let cached = moe::heuristic_ranking_cache_path_for_method(model_path, method);
+    if let Some(ranking) = moe::load_cached_ranking(&cached) {
+        return Ok((ranking, cached.display().to_string()));
+    }
+    let ranking = moe::compute_heuristic_ranking_with_method(model_path, expert_count, method)?;
+    moe::write_cached_ranking(&cached, &ranking)?;
+    Ok((ranking, cached.display().to_string()))
+}
+
+fn resolve_analyze_binary(bin_dir: &Path) -> anyhow::Result<std::path::PathBuf> {
+    let candidates = [
+        bin_dir.join("llama-moe-analyze"),
+        bin_dir.join("../llama.cpp/build/bin/llama-moe-analyze"),
+        bin_dir.join("../../llama.cpp/build/bin/llama-moe-analyze"),
+        bin_dir.join("../../../llama.cpp/build/bin/llama-moe-analyze"),
+    ];
+    for candidate in candidates {
+        if candidate.exists() {
+            return Ok(candidate.canonicalize().unwrap_or(candidate));
+        }
+    }
+    anyhow::bail!(
+        "llama-moe-analyze not found in {} or nearby llama.cpp/build/bin directories",
+        bin_dir.display()
+    )
+}
+
+fn ensure_full_analyze_ranking(
+    bin_dir: &Path,
+    model_path: &Path,
+    cached_path: &Path,
+) -> anyhow::Result<Vec<u32>> {
+    if let Some(ranking) = moe::load_cached_ranking(cached_path) {
+        return Ok(ranking);
+    }
+    if let Some(parent) = cached_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let analyze_bin = resolve_analyze_binary(bin_dir)?;
+    let started = std::time::Instant::now();
+    let status = Command::new(&analyze_bin)
+        .args([
+            "-m",
+            &model_path.to_string_lossy(),
+            "--all-layers",
+            "--export-ranking",
+            &cached_path.to_string_lossy(),
+            "-n",
+            "32",
+            "-c",
+            "4096",
+            "-ngl",
+            "99",
+        ])
+        .status()?;
+    anyhow::ensure!(status.success(), "llama-moe-analyze exited with {status}");
+    eprintln!(
+        "  Full moe-analyze cached at {} in {:.1}s",
+        cached_path.display(),
+        started.elapsed().as_secs_f64()
+    );
+    moe::load_cached_ranking(cached_path).ok_or_else(|| {
+        anyhow::anyhow!(
+            "No ranking produced by full analyze at {}",
+            cached_path.display()
+        )
+    })
+}
+
+#[derive(Clone, Copy)]
+struct AnalyzeMassRow {
+    expert_id: u32,
+    gate_mass: f64,
+}
+
+fn run_micro_analyze_ranking(
+    bin_dir: &Path,
+    model_path: &Path,
+    options: &moe::MoeRuntimeOptions,
+) -> anyhow::Result<Vec<u32>> {
+    let prompts = default_micro_prompts();
+    let prompt_count = options.micro_prompt_count.max(1).min(prompts.len());
+    let analyze_bin = resolve_analyze_binary(bin_dir)?;
+    let timestamp_nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let tmp_dir = std::env::temp_dir().join(format!(
+        "mesh-llm-micro-live-{}-{}",
+        std::process::id(),
+        timestamp_nanos
+    ));
+    std::fs::create_dir_all(&tmp_dir)?;
+    let started = std::time::Instant::now();
+    let mut mass_by_expert: HashMap<u32, f64> = HashMap::new();
+
+    for (idx, prompt) in prompts.iter().take(prompt_count).enumerate() {
+        let output_path = tmp_dir.join(format!("prompt-{idx}.csv"));
+        let mut command = Command::new(&analyze_bin);
+        command.args([
+            "-m",
+            &model_path.to_string_lossy(),
+            "--export-ranking",
+            &output_path.to_string_lossy(),
+            "-n",
+            &options.micro_tokens.to_string(),
+            "-c",
+            "4096",
+            "-ngl",
+            "99",
+            "-p",
+            prompt,
+        ]);
+        if matches!(options.micro_layer_scope, moe::MoeMicroLayerScope::All) {
+            command.arg("--all-layers");
+        }
+        let status = command.status()?;
+        anyhow::ensure!(status.success(), "llama-moe-analyze exited with {status}");
+        for row in load_analyze_mass_rows(&output_path)? {
+            *mass_by_expert.entry(row.expert_id).or_insert(0.0) += row.gate_mass;
+        }
+    }
+
+    let mut rows = mass_by_expert.into_iter().collect::<Vec<_>>();
+    rows.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    let ranking = rows.into_iter().map(|(expert_id, _)| expert_id).collect();
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+    eprintln!(
+        "  Micro moe-analyze used {} prompt(s), {} token(s), {} in {:.1}s",
+        prompt_count,
+        options.micro_tokens,
+        match options.micro_layer_scope {
+            moe::MoeMicroLayerScope::All => "all layers",
+            moe::MoeMicroLayerScope::First => "first layer",
+        },
+        started.elapsed().as_secs_f64()
+    );
+    Ok(ranking)
+}
+
+fn load_analyze_mass_rows(path: &Path) -> anyhow::Result<Vec<AnalyzeMassRow>> {
+    let content = std::fs::read_to_string(path)?;
+    let mut rows = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with("expert") {
+            continue;
+        }
+        let parts = trimmed.split(',').map(str::trim).collect::<Vec<_>>();
+        if parts.len() < 2 {
+            continue;
+        }
+        rows.push(AnalyzeMassRow {
+            expert_id: parts[0].parse()?,
+            gate_mass: parts[1].parse()?,
+        });
+    }
+    Ok(rows)
+}
+
+fn default_micro_prompts() -> &'static [&'static str] {
+    &[
+        "User: Explain how mixture-of-experts routing works in a language model.\nAssistant:",
+        "User: Write a short professional email asking for feedback on a technical design.\nAssistant:",
+        "User: Outline a debugging plan for a flaky distributed systems test.\nAssistant:",
+        "User: Summarize the tradeoffs between latency and quality in MoE inference.\nAssistant:",
+    ]
+}
+
 /// Background election loop for a single model.
 /// This node serves `model` — it only cares about peers also serving `model`.
 ///
@@ -273,6 +573,7 @@ pub async fn election_loop(
     force_split: bool,
     binary_flavor: Option<launch::BinaryFlavor>,
     ctx_size_override: Option<u32>,
+    moe_runtime_options: moe::MoeRuntimeOptions,
     target_tx: Arc<watch::Sender<ModelTargets>>,
     mut stop_rx: watch::Receiver<bool>,
     mut on_change: impl FnMut(bool, bool) + Send,
@@ -307,9 +608,28 @@ pub async fn election_loop(
     // MoE mode: each node runs its own llama-server with its expert shard.
     // Only enter MoE split mode if the model doesn't fit locally or --split is forced.
     // Otherwise, just run the full model — every node is independent.
-    if let Some(ref moe_cfg) = moe_config {
+    if moe_config.is_some() {
         let need_moe_split = force_split || !model_fits_locally;
         if need_moe_split {
+            let resolved_moe_cfg = match resolve_runtime_moe_config(
+                &model_name,
+                &model,
+                &bin_dir,
+                &moe_runtime_options,
+            ) {
+                Ok(Some(cfg)) => cfg,
+                Ok(None) => {
+                    eprintln!("⚠️  [{}] Failed to resolve MoE split config", model_name);
+                    return;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "⚠️  [{}] Failed to resolve MoE ranking/grouping: {e}",
+                        model_name
+                    );
+                    return;
+                }
+            };
             moe_election_loop(
                 node,
                 tunnel_mgr,
@@ -317,7 +637,7 @@ pub async fn election_loop(
                 bin_dir,
                 model,
                 model_name,
-                moe_cfg.clone(),
+                resolved_moe_cfg,
                 my_vram,
                 model_bytes as u64,
                 binary_flavor,
@@ -676,7 +996,7 @@ async fn moe_election_loop(
     bin_dir: std::path::PathBuf,
     model: std::path::PathBuf,
     model_name: String,
-    moe_cfg: crate::models::catalog::MoeConfig,
+    moe_cfg: ResolvedMoeConfig,
     my_vram: u64,
     model_bytes: u64,
     binary_flavor: Option<launch::BinaryFlavor>,
@@ -827,14 +1147,33 @@ async fn moe_election_loop(
         } else {
             // Multi-node MoE: split and load our shard
             eprintln!(
-                "🧩 [{}] MoE split mode — {} nodes, I am shard {}/{}",
-                model_name, n_nodes, my_shard_index, n_nodes
+                "🧩 [{}] MoE split mode — {} nodes, I am shard {}/{} ({}, {})",
+                model_name,
+                n_nodes,
+                my_shard_index,
+                n_nodes,
+                moe_cfg.ranking_source,
+                match moe_cfg.grouping_strategy {
+                    moe::MoeGroupingStrategy::SharedCore => "shared-core",
+                    moe::MoeGroupingStrategy::SnakeDraft => "snake-draft",
+                }
             );
             on_change(true, false);
 
             // Compute assignments and get our shard
-            let assignments =
-                moe::compute_assignments(&moe_cfg.ranking, n_nodes, moe_cfg.min_experts_per_node);
+            let assignments = match moe_cfg.grouping_strategy {
+                moe::MoeGroupingStrategy::SharedCore => moe::compute_assignments_with_overlap(
+                    &moe_cfg.config.ranking,
+                    n_nodes,
+                    moe_cfg.config.min_experts_per_node,
+                    moe_cfg.overlap,
+                ),
+                moe::MoeGroupingStrategy::SnakeDraft => moe::compute_snake_draft_assignments(
+                    &moe_cfg.config.ranking,
+                    n_nodes,
+                    moe_cfg.replicate as usize,
+                ),
+            };
             let my_assignment = &assignments[my_shard_index];
             eprintln!(
                 "  My experts: {} ({} shared + {} unique)",
