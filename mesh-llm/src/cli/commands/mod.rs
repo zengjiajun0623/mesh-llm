@@ -1,19 +1,22 @@
 mod blackboard;
 mod discover;
+mod download;
 mod integrations;
 mod models;
 mod plugin;
+mod runtime;
 
 use anyhow::Result;
 
 use crate::cli::commands::blackboard::{install_skill, run_blackboard};
 use crate::cli::commands::discover::{run_discover, run_stop};
+use crate::cli::commands::download::dispatch_download_command;
 use crate::cli::commands::integrations::{run_claude, run_goose};
 use crate::cli::commands::models::dispatch_models_command;
 use crate::cli::commands::plugin::run_plugin_command;
-use crate::cli::runtime::{run_drop, run_load, run_status, RuntimeCommand};
+use crate::cli::commands::runtime::{dispatch_runtime_command, run_drop, run_load, run_status};
 use crate::cli::{Cli, Command};
-use crate::{nostr, runtime};
+use crate::nostr;
 
 pub(crate) async fn dispatch(cli: &Cli) -> Result<bool> {
     let Some(cmd) = cli.command.as_ref() else {
@@ -25,40 +28,9 @@ pub(crate) async fn dispatch(cli: &Cli) -> Result<bool> {
             Ok(())
         }
         Command::Download { name, draft } => {
-            match name {
-                Some(query) => {
-                    let model = crate::models::catalog::find_model(query).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "No model matching '{}' in catalog. Run `mesh-llm download` to list.",
-                            query
-                        )
-                    })?;
-                    crate::models::catalog::download_model(model).await?;
-                    if *draft {
-                        if let Some(draft_name) = model.draft.as_deref() {
-                            let draft_model = crate::models::catalog::find_model(draft_name)
-                                .ok_or_else(|| {
-                                    anyhow::anyhow!(
-                                        "Draft model '{}' not found in catalog",
-                                        draft_name
-                                    )
-                                })?;
-                            crate::models::catalog::download_model(draft_model).await?;
-                        } else {
-                            eprintln!("⚠ No draft model available for {}", model.name);
-                        }
-                    }
-                }
-                None => crate::models::catalog::list_models(),
-            }
-            Ok(())
+            dispatch_download_command(name.as_deref(), *draft).await
         }
-        Command::Runtime { command } => match command {
-            Some(RuntimeCommand::Status { port }) => run_status(*port).await,
-            Some(RuntimeCommand::Load { name, port }) => run_load(name, *port).await,
-            Some(RuntimeCommand::Unload { name, port }) => run_drop(name, *port).await,
-            None => run_status(3131).await,
-        },
+        Command::Runtime { command } => dispatch_runtime_command(command.as_ref()).await,
         Command::Load { name, port } => run_load(name, *port).await,
         Command::Unload { name, port } => run_drop(name, *port).await,
         Command::Status { port } => run_status(*port).await,
@@ -92,7 +64,7 @@ pub(crate) async fn dispatch(cli: &Cli) -> Result<bool> {
             mcp,
         } => {
             if *mcp {
-                runtime::run_plugin_mcp(cli).await
+                crate::runtime::run_plugin_mcp(cli).await
             } else if text.as_deref() == Some("install-skill") {
                 install_skill()
             } else {
