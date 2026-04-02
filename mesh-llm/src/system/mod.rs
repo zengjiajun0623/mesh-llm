@@ -1,4 +1,3 @@
-pub(crate) mod affinity;
 pub(crate) mod autoupdate;
 pub(crate) mod benchmark;
 pub(crate) mod hardware;

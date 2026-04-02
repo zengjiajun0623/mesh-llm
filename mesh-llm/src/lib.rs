@@ -18,11 +18,11 @@ pub mod proto {
 
 pub(crate) use autoupdate::{latest_release_version, version_newer};
 pub(crate) use inference::{election, launch, moe, pipeline};
-pub(crate) use network::{nostr, proxy, rewrite, router, tunnel};
+pub(crate) use network::{affinity, nostr, proxy, rewrite, router, tunnel};
 pub use plugins::blackboard;
 pub use plugins::blackboard::mcp as blackboard_mcp;
 pub(crate) use system::benchmark;
-pub(crate) use system::{affinity, autoupdate, hardware};
+pub(crate) use system::{autoupdate, hardware};
 
 use anyhow::Result;
 
