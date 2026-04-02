@@ -397,11 +397,8 @@ fn parse_hf_resolve_url_parts(url: &str) -> Option<(String, Option<String>, Stri
         .or_else(|| url.strip_prefix("http://huggingface.co/"))?;
     let (repo, rest) = path.split_once("/resolve/")?;
     let (revision, file) = rest.split_once('/')?;
-    Some((
-        repo.to_string(),
-        Some(revision.to_string()),
-        file.to_string(),
-    ))
+    let canonical = format!("{repo}@{revision}/{file}");
+    parse_hf_ref_parts(&canonical)
 }
 
 fn format_hf_canonical_ref(repo: &str, revision: Option<&str>, file: &str) -> String {
