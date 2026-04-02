@@ -1,9 +1,6 @@
-mod affinity;
 mod api;
-mod autoupdate;
 mod benchmark;
 mod cli;
-mod hardware;
 mod inference;
 mod mesh;
 mod models;
@@ -14,6 +11,7 @@ mod plugins;
 mod protocol;
 mod rewrite;
 pub(crate) mod runtime;
+mod system;
 
 pub mod proto {
     pub mod node {
@@ -26,6 +24,7 @@ pub(crate) use inference::{election, launch, moe, pipeline};
 pub(crate) use network::{nostr, proxy, router, tunnel};
 pub use plugins::blackboard;
 pub use plugins::blackboard::mcp as blackboard_mcp;
+pub(crate) use system::{affinity, autoupdate, hardware};
 
 use anyhow::Result;
 
