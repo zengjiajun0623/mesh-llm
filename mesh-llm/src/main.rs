@@ -861,20 +861,19 @@ fn apply_model_from_mesh_config_if_allowed(
         return false;
     }
 
-    for model in &node_cfg.models {
-        let selected_source = model
-            .path
-            .as_deref()
-            .map(str::trim)
-            .filter(|p| !p.is_empty())
-            .unwrap_or(model.name.as_str());
-        cli.model.push(PathBuf::from(selected_source));
-    }
+    let model = &node_cfg.models[0];
+    let selected_source = model
+        .path
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .unwrap_or(model.name.as_str());
+    cli.model.push(PathBuf::from(selected_source));
     true
 }
 
 fn cli_allows_startup_mesh_config(cli: &Cli) -> bool {
-    cli.model.is_empty() && !cli.client
+    cli.model.is_empty() && !cli.client && !cli.auto && cli.join.is_empty()
 }
 
 /// Look up the model filename in the catalog and check if its draft model exists on disk.

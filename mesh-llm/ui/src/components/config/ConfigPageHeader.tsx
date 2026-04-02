@@ -13,6 +13,10 @@ type ConfigPageHeaderProps = {
   onSaveSuccess: (savedConfig: MeshConfig) => void;
   onRevert?: () => void;
   onBackendErrors?: (errors: ConfigValidationError[]) => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
 };
 
 export function ConfigPageHeader({
@@ -26,6 +30,10 @@ export function ConfigPageHeader({
   onSaveSuccess,
   onRevert,
   onBackendErrors,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
 }: ConfigPageHeaderProps) {
   return (
     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -58,6 +66,10 @@ export function ConfigPageHeader({
         onSaveSuccess={onSaveSuccess}
         onRevert={onRevert}
         onBackendErrors={onBackendErrors}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        onUndo={onUndo}
+        onRedo={onRedo}
       />
     </div>
   );

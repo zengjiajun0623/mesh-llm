@@ -377,8 +377,14 @@ export function VramContainer({
         ref={mergedContainerRef}
         data-testid="vram-container"
         className={cn(
-          'space-y-2',
-          isDraggingAssignable && wouldFit && 'border-emerald-500/50 rounded-lg border',
+          'rounded-lg border p-4 transition-all duration-200',
+          isOvercommitted
+            ? 'border-destructive/40 bg-destructive/5 shadow-[inset_0_1px_0_0_hsl(0_84%_60%/0.08)]'
+            : isDraggingAssignable
+              ? wouldFit
+                ? 'border-emerald-500/50 bg-emerald-500/5 ring-1 ring-emerald-500/20'
+                : 'border-destructive/40 bg-destructive/5 ring-1 ring-destructive/15'
+              : 'border-border/60 bg-muted/15 shadow-[inset_0_1px_0_0_hsl(var(--foreground)/0.03)]',
         )}
         data-placement-target={placementTarget}
         onKeyDown={handleKeyDown}
@@ -424,7 +430,7 @@ export function VramContainer({
         </div>
       ) : null}
 
-      {assignments.length > 0 ? (
+      {assignments.length > 0 || showReservedBlock ? (
         <div className="flex min-h-[3rem] w-full gap-1.5 overflow-visible rounded-md border border-border/40" data-testid="vram-capacity-bar">
           {showReservedBlock && reservedPercent > 0.5 ? (
             <Tooltip>
@@ -505,11 +511,15 @@ export function VramContainer({
             </div>
           ) : null}
         </div>
-      ) : (
+      ) : null}
+
+      {assignments.length === 0 ? (
         <div
           data-testid="vram-empty"
           className={cn(
-            'flex min-h-[4rem] items-center justify-center rounded-md border text-xs text-muted-foreground/60',
+            showReservedBlock
+              ? 'mt-2 flex min-h-[2rem] items-center justify-center rounded-md border text-xs text-muted-foreground/50'
+              : 'flex min-h-[4rem] items-center justify-center rounded-md border text-xs text-muted-foreground/60',
             isDraggingAssignable
               ? wouldFit
                 ? 'border-emerald-500/40 bg-emerald-500/5 text-emerald-600/60 dark:text-emerald-400/60'
@@ -519,7 +529,7 @@ export function VramContainer({
         >
           Drag models from the catalog to assign them
         </div>
-      )}
+      ) : null}
 
       {isDraggingAssignable ? (
         <div

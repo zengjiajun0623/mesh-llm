@@ -373,7 +373,7 @@ pub(crate) fn proto_ann_to_local(
         gpu_bandwidth_gbps: None,
         available_model_metadata: Vec::new(),
         experts_summary: pa.experts_summary.clone(),
-        available_model_sizes: pa.available_model_sizes.clone(),
+        available_model_sizes: HashMap::new(),
         served_model_descriptors: if !pa.served_model_descriptors.is_empty() {
             let descriptors: Vec<_> = pa
                 .served_model_descriptors

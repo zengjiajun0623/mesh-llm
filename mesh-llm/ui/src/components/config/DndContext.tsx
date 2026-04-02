@@ -1,9 +1,6 @@
 import { configure } from '@dnd-kit/abstract';
-import { DragDropProvider, DragOverlay, KeyboardSensor, PointerSensor } from '@dnd-kit/react';
+import { DragDropProvider, KeyboardSensor, PointerSensor } from '@dnd-kit/react';
 import { useMemo, type ReactNode } from 'react';
-
-import { cn } from '../../lib/utils';
-import { GPU_SYSTEM_OVERHEAD_BYTES } from '../../lib/vram';
 
 type DragModelData = {
   type: 'model';
@@ -40,7 +37,6 @@ function isDragSplitAssignmentData(data: unknown): data is DragSplitAssignmentDa
 type DndContextProps = {
   children: ReactNode;
   selectedNodeId: string | null;
-  selectedNodeVramBytes?: number;
   onAssignModel?: (modelName: string, sizeBytes: number, nodeId: string) => void;
   onMoveSplitAssignment?: (move: { assignmentId: string; sourceNodeId: string; targetNodeId: string }) => void;
 };
@@ -66,54 +62,9 @@ function resolveDropTargetNodeId(targetId: string, selectedNodeId: string | null
   return null;
 }
 
-type OverlayFitStatus = 'fits' | 'tight' | 'too-large';
-
-function computeOverlayFitStatus(sizeBytes: number, vramBytes: number): OverlayFitStatus {
-  if (sizeBytes * 1.1 + GPU_SYSTEM_OVERHEAD_BYTES <= vramBytes) return 'fits';
-  if (sizeBytes <= vramBytes) return 'tight';
-  return 'too-large';
-}
-
-function formatSizeGb(sizeBytes: number): string {
-  const gb = sizeBytes / 1e9;
-  return `${gb >= 100 ? Math.round(gb) : gb.toFixed(1)} GB`;
-}
-
-function OverlayFitBadge({ status }: { status: OverlayFitStatus }) {
-  const base = 'flex-none rounded px-1.5 py-0.5 text-[10px] font-medium';
-  if (status === 'fits') {
-    return (
-      <span
-        data-testid="overlay-fit-badge"
-        className={cn(base, 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300')}
-      >
-        ✅ Fits
-      </span>
-    );
-  }
-  if (status === 'tight') {
-    return (
-      <span
-        data-testid="overlay-fit-badge"
-        className={cn(base, 'bg-amber-500/10 text-amber-700 dark:text-amber-300')}
-      >
-        ⚠️ Tight
-      </span>
-    );
-  }
-  return (
-    <span
-      data-testid="overlay-fit-badge"
-      className={cn(base, 'bg-destructive/10 text-destructive')}
-    >
-      ❌ Too Large
-    </span>
-  );
-}
-
 export type { DragModelData, DragSplitAssignmentData };
 
-export function DndContext({ children, selectedNodeId, selectedNodeVramBytes, onAssignModel, onMoveSplitAssignment }: DndContextProps) {
+export function DndContext({ children, selectedNodeId, onAssignModel, onMoveSplitAssignment }: DndContextProps) {
   const sensors = useMemo(
     () => [
       configure(PointerSensor, {
@@ -156,42 +107,6 @@ export function DndContext({ children, selectedNodeId, selectedNodeVramBytes, on
       }}
     >
       {children}
-      <DragOverlay>
-        {(source) => {
-          const data = source.data as unknown;
-
-          let modelName: string;
-          let sizeBytes: number | undefined;
-
-          if (isDragModelData(data)) {
-            modelName = data.modelName;
-            sizeBytes = data.sizeBytes;
-          } else if (isDragSplitAssignmentData(data)) {
-            modelName = data.modelName;
-            sizeBytes = data.sizeBytes;
-          } else {
-            return null;
-          }
-
-          const fitStatus =
-            sizeBytes != null && selectedNodeVramBytes && selectedNodeVramBytes > 0
-              ? computeOverlayFitStatus(sizeBytes, selectedNodeVramBytes)
-              : null;
-
-          return (
-            <div
-              data-testid="drag-overlay-card"
-              className="flex items-center gap-2 rounded-md border border-border/80 bg-card px-3 py-2 text-sm shadow-lg ring-1 ring-primary/20"
-            >
-              <span className="min-w-0 flex-1 truncate font-medium text-foreground">{modelName}</span>
-              {sizeBytes != null && (
-                <span className="flex-none text-xs text-muted-foreground">{formatSizeGb(sizeBytes)}</span>
-              )}
-              {fitStatus != null && <OverlayFitBadge status={fitStatus} />}
-            </div>
-          );
-        }}
-      </DragOverlay>
     </DragDropProvider>
   );
 }

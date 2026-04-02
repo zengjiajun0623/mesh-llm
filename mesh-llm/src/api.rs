@@ -2957,6 +2957,7 @@ mod tests {
     use iroh::SecretKey;
     use iroh::{EndpointAddr, EndpointId};
     use mesh_llm_plugin::MeshVisibility;
+    use serial_test::serial;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{TcpListener, TcpStream};
@@ -3438,8 +3439,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn config_requires_valid_owner_signature() {
-        let body = "version = 3\n\n[[nodes]]\nnode_id = \"node-a\"\n";
+        let body = "version = 1\n\n[[nodes]]\nnode_id = \"node-a\"\n";
         let method = "POST";
         let path = "/api/config";
 
@@ -3455,7 +3457,7 @@ mod tests {
         )
         .unwrap();
 
-        std::fs::write(temp.join(".mesh-llm/mesh.toml"), "version = 3\n").unwrap();
+        std::fs::write(temp.join(".mesh-llm/mesh.toml"), "version = 1\n").unwrap();
 
         let fresh_timestamp = now_unix_timestamp();
         let stale_timestamp = now_unix_timestamp() - (CONFIG_TIMESTAMP_MAX_AGE_SECS + 5);
@@ -3599,8 +3601,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn config_broadcast_requires_loopback_origin() {
-        let body = "version = 3\n\n[[nodes]]\nnode_id = \"node-a\"\n";
+        let body = "version = 1\n\n[[nodes]]\nnode_id = \"node-a\"\n";
 
         let temp = make_temp_dir();
         let owner_secret = SecretKey::from_bytes(&[0x42; 32]);
@@ -3672,14 +3675,15 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn stale_prev_config_hash_returns_conflict() {
-        let body = "version = 3\n\n[[nodes]]\nnode_id = \"node-a\"\n";
+        let body = "version = 1\n\n[[nodes]]\nnode_id = \"node-a\"\n";
         let owner_secret = SecretKey::from_bytes(&[0x42; 32]);
         let owner_fingerprint = hex::encode(Sha256::digest(owner_secret.public().as_bytes()));
 
         let temp = make_temp_dir();
         configure_test_owner_key(&temp, &owner_secret);
-        std::fs::write(temp.join(".mesh-llm/mesh.toml"), "version = 3\n").unwrap();
+        std::fs::write(temp.join(".mesh-llm/mesh.toml"), "version = 1\n").unwrap();
 
         let timestamp = now_unix_timestamp();
         let stale_prev_config_hash = "cfg-hash-stale";
@@ -3712,8 +3716,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn config_accepted_when_receiver_has_no_config_file() {
-        let body = "version = 3\n\n[[nodes]]\nnode_id = \"node-a\"\n";
+        let body = "version = 1\n\n[[nodes]]\nnode_id = \"node-a\"\n";
         let owner_secret = SecretKey::from_bytes(&[0x42; 32]);
         let owner_fingerprint = hex::encode(Sha256::digest(owner_secret.public().as_bytes()));
 
@@ -3764,8 +3769,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn replayed_signed_checkpoint_is_rejected_after_restart() {
-        let body = "version = 3\n\n[[nodes]]\nnode_id = \"node-a\"\n";
+        let body = "version = 1\n\n[[nodes]]\nnode_id = \"node-a\"\n";
         let owner_secret = SecretKey::from_bytes(&[0x42; 32]);
         let owner_fingerprint = hex::encode(Sha256::digest(owner_secret.public().as_bytes()));
 
@@ -3812,10 +3818,11 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn loopback_broadcast_signs_and_relays_to_owned_peers() {
         let owner_secret = SecretKey::from_bytes(&[0x42; 32]);
         let owner_fingerprint = hex::encode(Sha256::digest(owner_secret.public().as_bytes()));
-        let body = "version = 3\n\n[[nodes]]\nnode_id = \"node-a\"\n";
+        let body = "version = 1\n\n[[nodes]]\nnode_id = \"node-a\"\n";
 
         let temp = make_temp_dir();
         configure_test_owner_key(&temp, &owner_secret);
@@ -3893,8 +3900,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn unowned_broadcast_does_not_mutate_local_config_or_runtime_files() {
-        let body = "version = 3\n\n[[nodes]]\nnode_id = \"node-a\"\n";
+        let body = "version = 1\n\n[[nodes]]\nnode_id = \"node-a\"\n";
 
         let temp = make_temp_dir();
         std::fs::create_dir_all(temp.join(".mesh-llm")).unwrap();
@@ -3902,7 +3910,7 @@ mod tests {
 
         let mesh_path = mesh_config_path();
         let node_path = node_config_path();
-        let initial_mesh = "version = 3\n";
+        let initial_mesh = "version = 1\n";
         let initial_node = "node_id = \"sentinel\"\n";
         std::fs::write(&mesh_path, initial_mesh).unwrap();
         std::fs::write(&node_path, initial_node).unwrap();
@@ -4011,7 +4019,7 @@ mod tests {
         let path = temp.join("mesh.toml");
 
         let input = r#"
-version = 2
+version = 1
 
 [[nodes]]
 node_id = "abc123"

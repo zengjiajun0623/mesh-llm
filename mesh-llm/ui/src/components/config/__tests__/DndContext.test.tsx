@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { useDraggable } from '@dnd-kit/react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -101,39 +101,13 @@ describe('DndContext', () => {
     expect(onAssign).not.toHaveBeenCalled();
   });
 
-  it('DragOverlay renders with model name text when a drag is active', async () => {
+  it('renders a draggable child without error', () => {
     render(
-      <DndContext selectedNodeId="node-a" selectedNodeVramBytes={24_000_000_000}>
+      <DndContext selectedNodeId="node-a">
         <TestModelDraggable modelName="GLM-4.7-Flash-Q4_K_M" sizeBytes={10_000_000_000} />
       </DndContext>,
     );
 
-    const handle = screen.getByTestId('drag-handle');
-    const draggable = screen.getByTestId('test-draggable');
-
-    setRect(draggable as HTMLElement, {
-      x: 20, y: 20, top: 20, left: 20, right: 260, bottom: 80, width: 240, height: 60,
-    } as DOMRect);
-    setRect(handle as HTMLElement, {
-      x: 20, y: 20, top: 20, left: 20, right: 260, bottom: 80, width: 240, height: 60,
-    } as DOMRect);
-
-    fireEvent.pointerDown(handle, {
-      button: 0, buttons: 1, isPrimary: true, pointerId: 1, pointerType: 'mouse', clientX: 120, clientY: 50,
-    });
-
-    await act(async () => {
-      fireEvent.pointerMove(document, {
-        buttons: 1, isPrimary: true, pointerId: 1, pointerType: 'mouse', clientX: 400, clientY: 300,
-      });
-    });
-
-    await waitFor(() => {
-      const overlay = screen.queryByTestId('drag-overlay-card');
-      expect(overlay).not.toBeNull();
-    });
-
-    const overlay = screen.getByTestId('drag-overlay-card');
-    expect(overlay).toHaveTextContent('GLM-4.7-Flash-Q4_K_M');
+    expect(screen.getByTestId('drag-handle')).toBeVisible();
   });
 });

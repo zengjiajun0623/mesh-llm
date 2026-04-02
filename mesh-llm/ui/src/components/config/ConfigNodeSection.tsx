@@ -86,6 +86,8 @@ type ConfigNodeSectionProps = {
   ) => void;
   onUpdateModel: (assignmentId: string, updates: Partial<ModelAssignment>) => void;
   onPlacementModeChange?: (mode: PlacementMode) => void;
+  onBeginBatch?: () => void;
+  onEndBatch?: () => void;
 };
 
 export function ConfigNodeSection({
@@ -114,6 +116,8 @@ export function ConfigNodeSection({
   onResizeSplitBoundary,
   onUpdateModel,
   onPlacementModeChange,
+  onBeginBatch,
+  onEndBatch,
 }: ConfigNodeSectionProps) {
   const compatibilityNode = node as OwnedNode & {
     hardwareLabel?: 'GPU' | 'SoC';
@@ -328,7 +332,7 @@ export function ConfigNodeSection({
                 availableNodeCount={availableNodeCount}
                 crossNodeSplitGroupIds={crossNodeSplitGroupIds}
                 placementTarget={`${node.id}:gpu-${gpu.index}`}
-                showReservedBlock={gpu.index === 0}
+                showReservedBlock
               />
             </div>
           ))
@@ -382,6 +386,8 @@ export function ConfigNodeSection({
             aggregated={selectedAggregated}
             metadata={selectedMetadata}
             onUpdateModel={onUpdateModel}
+            onBeginBatch={onBeginBatch}
+            onEndBatch={onEndBatch}
           />
         ) : null}
       </div>

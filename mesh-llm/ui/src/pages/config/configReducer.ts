@@ -29,6 +29,8 @@ export type ConfigAction =
     }
   | { type: "SET_CONFIG"; config: MeshConfig }
   | { type: "CLEAR_NODE_AND_SET_MODE"; nodeId: string; mode: PlacementMode }
+  | { type: "BEGIN_BATCH" }
+  | { type: "END_BATCH" }
   | { type: "UNDO" }
   | { type: "REDO" };
 
@@ -132,32 +134,61 @@ export type ConfigHistoryState = {
   config: MeshConfig;
   past: MeshConfig[];
   future: MeshConfig[];
+  batchSnapshot?: MeshConfig;
 };
 
 export function configHistoryReducer(
   state: ConfigHistoryState,
   action: ConfigAction,
 ): ConfigHistoryState {
+  if (action.type === "BEGIN_BATCH") {
+    if (state.batchSnapshot !== undefined) return state;
+    return { ...state, batchSnapshot: state.config };
+  }
+
+  if (action.type === "END_BATCH") {
+    const { batchSnapshot } = state;
+    if (!batchSnapshot) return state;
+    if (batchSnapshot === state.config) {
+      return { ...state, batchSnapshot: undefined };
+    }
+    return {
+      config: state.config,
+      past: [...state.past, batchSnapshot].slice(-30),
+      future: [],
+      batchSnapshot: undefined,
+    };
+  }
+
   if (action.type === "UNDO") {
-    if (state.past.length === 0) return state;
-    const prev = state.past[state.past.length - 1];
+    const base = state.batchSnapshot ? { ...state, batchSnapshot: undefined } : state;
+    if (base.past.length === 0) return base;
+    const prev = base.past[base.past.length - 1];
     return {
       config: prev,
-      past: state.past.slice(0, -1),
-      future: [state.config, ...state.future],
+      past: base.past.slice(0, -1),
+      future: [base.config, ...base.future],
     };
   }
+
   if (action.type === "REDO") {
-    if (state.future.length === 0) return state;
-    const next = state.future[0];
+    const base = state.batchSnapshot ? { ...state, batchSnapshot: undefined } : state;
+    if (base.future.length === 0) return base;
+    const next = base.future[0];
     return {
       config: next,
-      past: [...state.past, state.config].slice(-30),
-      future: state.future.slice(1),
+      past: [...base.past, base.config].slice(-30),
+      future: base.future.slice(1),
     };
   }
+
   const newConfig = configReducer(state.config, action);
   if (newConfig === state.config) return state;
+
+  if (state.batchSnapshot !== undefined) {
+    return { ...state, config: newConfig, future: [] };
+  }
+
   return {
     config: newConfig,
     past: [...state.past, state.config].slice(-30),

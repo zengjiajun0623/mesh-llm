@@ -11,6 +11,8 @@ type ContextWindowControlProps = {
   modelSizeBytes?: number;
   metadata?: ScannedModelMetadata | null;
   onCtxSizeChange: (n: number) => void;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
 };
 
 function formatCtxLabel(size: number) {
@@ -105,6 +107,8 @@ export function ContextWindowControl({
   modelSizeBytes = 0,
   metadata,
   onCtxSizeChange,
+  onDragStart,
+  onDragEnd,
 }: ContextWindowControlProps) {
   const metadataMaxCtx = metadata?.context_length;
   const maxCtx = typeof metadataMaxCtx === 'number' && Number.isFinite(metadataMaxCtx) && metadataMaxCtx >= MIN_CTX
@@ -143,6 +147,8 @@ export function ContextWindowControl({
         step={1}
         value={sliderValue}
         onChange={handleSliderChange}
+        onPointerDown={onDragStart}
+        onPointerUp={onDragEnd}
         className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-muted/60 accent-primary focus-visible:outline-none
           [&::-moz-range-thumb]:h-3 [&::-moz-range-thumb]:w-3 [&::-moz-range-thumb]:rounded-full
           [&::-moz-range-thumb]:border-0 [&::-moz-range-thumb]:bg-primary

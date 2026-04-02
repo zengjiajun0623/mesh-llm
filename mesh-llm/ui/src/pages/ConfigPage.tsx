@@ -415,6 +415,10 @@ export function ConfigPage({
           onSaveSuccess={handleSaveSuccess}
           onRevert={handleRevert}
           onBackendErrors={handleBackendErrors}
+          canUndo={canUndo}
+          canRedo={canRedo}
+          onUndo={() => dispatch({ type: "UNDO" })}
+          onRedo={() => dispatch({ type: "REDO" })}
         />
 
         {backendValidationErrors
@@ -453,7 +457,6 @@ export function ConfigPage({
         ) : (
           <DndContext
             selectedNodeId={selectedNodeId}
-            selectedNodeVramBytes={selectedCatalogNode?.vramBytes}
             onAssignModel={handleAssignModel}
             onMoveSplitAssignment={handleMoveSplitAssignment}
           >
@@ -514,10 +517,6 @@ export function ConfigPage({
                 onRefreshStatus={onRefreshStatus}
                 assignTargets={catalogAssignTargets}
                 onAssignToNode={handleAssignModel}
-                canUndo={canUndo}
-                canRedo={canRedo}
-                onUndo={() => dispatch({ type: "UNDO" })}
-                onRedo={() => dispatch({ type: "REDO" })}
               />
             )}
           </DndContext>

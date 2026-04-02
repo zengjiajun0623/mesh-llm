@@ -20,7 +20,7 @@ export function checkVramFit(
 
   return {
     fits: required <= available,
-    usedPercent: ((assignedBytes + required) / nodeVramBytes) * 100,
+    usedPercent: (required / nodeVramBytes) * 100,
   };
 }
 

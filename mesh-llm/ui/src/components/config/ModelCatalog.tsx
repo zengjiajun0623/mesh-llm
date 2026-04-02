@@ -1,6 +1,6 @@
 import { useDragOperation, useDraggable } from '@dnd-kit/react';
-import { RefreshCcwDot, Search } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Package, RefreshCcwDot, Search, SearchX } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ElementType, type ReactNode } from 'react';
 
 import { CatalogContextMenu, type ContextMenuPosition, type NodeAssignTarget } from './CatalogContextMenu';
 
@@ -122,25 +122,28 @@ function isEditableElement(target: EventTarget | null): boolean {
 }
 
 function CatalogEmptyState({
+  icon: Icon,
   title,
   description,
   detail,
   actions,
 }: {
+  icon?: ElementType;
   title: string;
   description: ReactNode;
   detail?: ReactNode;
   actions?: ReactNode;
 }) {
   return (
-    <div className="flex min-h-[18rem] flex-1 items-center rounded-md border border-dashed border-border/70 bg-muted/20 px-6 py-8">
+    <div className="flex min-h-[18rem] flex-1 flex-col items-center justify-center rounded-md border border-dashed border-border/70 bg-muted/20 px-6 py-8 text-center">
+      {Icon ? <Icon className="mb-3 h-8 w-8 text-muted-foreground/60" aria-hidden="true" /> : null}
       <div className="max-w-md space-y-3">
         <div className="space-y-1.5">
           <div className="text-sm font-medium text-foreground">{title}</div>
           <div className="text-sm text-muted-foreground">{description}</div>
           {detail ? <div className="text-xs text-muted-foreground">{detail}</div> : null}
         </div>
-        {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
+        {actions ? <div className="flex flex-wrap items-center justify-center gap-2">{actions}</div> : null}
       </div>
     </div>
   );
@@ -195,7 +198,7 @@ function ModelCatalogCard({
           : disabled
             ? 'pointer-events-none cursor-default opacity-40'
             : fitToneClass(fit?.fits),
-        !disabled && !fullyPlaced && (isActiveDrag ? 'cursor-grabbing bg-background opacity-85 rotate-[2deg]' : 'cursor-grab'),
+        !disabled && !fullyPlaced && (isActiveDrag ? 'cursor-grabbing bg-background opacity-85' : 'cursor-grab'),
       )}
       style={useContentVisibility ? { contentVisibility: 'auto', containIntrinsicSize: 'auto 112px' } : undefined}
     >
@@ -511,6 +514,7 @@ export function ModelCatalog({
 
         {models.length === 0 ? (
           <CatalogEmptyState
+            icon={Package}
             title="Catalog is empty"
             description={
               <>
@@ -521,6 +525,7 @@ export function ModelCatalog({
           />
         ) : filteredModels.length === 0 ? (
           <CatalogEmptyState
+            icon={SearchX}
             title="No matching models"
             description={
               hasSearchQuery && hasNonAllFilter ? (

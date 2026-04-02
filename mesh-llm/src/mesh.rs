@@ -690,9 +690,6 @@ fn apply_transitive_ann(
     if ann.experts_summary.is_some() {
         existing.experts_summary = ann.experts_summary.clone();
     }
-    if !ann.available_model_sizes.is_empty() {
-        existing.available_model_sizes = ann.available_model_sizes.clone();
-    }
     let announced_fingerprint = ann.owner_fingerprint.clone();
     existing.owner_fingerprint = announced_fingerprint.clone();
     existing.owner_fingerprint_verified = false;
@@ -6196,9 +6193,13 @@ mod tests {
         let (_, final_local) = proto_ann_to_local(wire_pa, peer_id)
             .expect("final proto_ann_to_local must succeed")
             .expect("final proto_ann_to_local should return a concrete announcement");
-        assert_eq!(
-            final_local.available_model_metadata[0].model_key, "Qwen3-8B-Q4_K_M",
-            "model_key unchanged after full build_gossip_frame→wire→proto_ann_to_local path"
+        assert!(
+            final_local.available_model_metadata.is_empty(),
+            "metadata must be stripped after full build_gossip_frame→wire→proto_ann_to_local path"
+        );
+        assert!(
+            final_local.available_model_sizes.is_empty(),
+            "sizes must be stripped after full build_gossip_frame→wire→proto_ann_to_local path"
         );
     }
 

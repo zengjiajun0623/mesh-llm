@@ -75,6 +75,10 @@ export function TomlEditor({
       void codeToHtml(tomlText, { lang: 'toml', theme: 'github-dark' }).then((html) => {
         if (highlightDivRef.current) {
           highlightDivRef.current.innerHTML = html;
+          const pre = highlightDivRef.current.querySelector('pre');
+          if (pre) {
+            pre.style.backgroundColor = 'transparent';
+          }
         }
       });
     }, SHIKI_DEBOUNCE_MS);

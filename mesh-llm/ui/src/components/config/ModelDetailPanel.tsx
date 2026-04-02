@@ -13,6 +13,8 @@ type ModelDetailPanelProps = {
   aggregated: AggregatedModel | null;
   metadata: ScannedModelMetadata | null;
   onUpdateModel?: (assignmentId: string, updates: Partial<ModelAssignment>) => void;
+  onBeginBatch?: () => void;
+  onEndBatch?: () => void;
 };
 
 function MetadataRow({ label, value }: { label: string; value: string | number | undefined | null }) {
@@ -55,7 +57,7 @@ function EmptyDetailState() {
   );
 }
 
-export function ModelDetailPanel({ assignmentId, modelName, assignment, aggregated, metadata, onUpdateModel }: ModelDetailPanelProps) {
+export function ModelDetailPanel({ assignmentId, modelName, assignment, aggregated, metadata, onUpdateModel, onBeginBatch, onEndBatch }: ModelDetailPanelProps) {
   if (!modelName || !assignment) {
     return <EmptyDetailState />;
   }
@@ -145,6 +147,8 @@ export function ModelDetailPanel({ assignmentId, modelName, assignment, aggregat
             modelSizeBytes={aggregated?.sizeBytes ?? 0}
             metadata={metadata}
             onCtxSizeChange={(n) => onUpdateModel(resolvedAssignmentId, { ctx_size: n })}
+            onDragStart={onBeginBatch}
+            onDragEnd={onEndBatch}
           />
           {aggregated?.moe ? (
             <MoeSlider

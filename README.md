@@ -217,11 +217,11 @@ Build-from-source and UI development instructions are in [CONTRIBUTING.md](CONTR
 
 ## GPU placement config
 
-The config file (`~/.mesh-llm/mesh.toml`) lets you control how models are placed across GPUs on each node. The current schema version is **3**.
+The config file (`~/.mesh-llm/mesh.toml`) lets you control how models are placed across GPUs on each node. The current schema version is **1**.
 
 ### Schema version
 
-Config files carry a `version` field. Version 2 configs load without error and default to pooled mode — no migration step required.
+Config files carry a `version` field. Configs with an unrecognized version are rejected with an explicit error.
 
 ### `placement_mode`
 
@@ -249,7 +249,7 @@ Manual placement applies to whole models and dense split shards. MoE expert-leve
 Pooled mode (default):
 
 ```toml
-version = 3
+version = 1
 
 [[nodes]]
 node_id = "alpha.local"
@@ -262,7 +262,7 @@ name = "Llama-3.2-3B-Instruct-Q4_K_M"
 Separate mode with explicit GPU assignment:
 
 ```toml
-version = 3
+version = 1
 
 [[nodes]]
 node_id = "alpha.local"

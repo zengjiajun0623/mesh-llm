@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Check, TriangleAlert, X } from 'lucide-react';
+import { Check, Redo2, TriangleAlert, Undo2, X } from 'lucide-react';
 
 import * as DialogPrimitive from '@radix-ui/react-dialog';
 
@@ -57,6 +57,10 @@ type Props = {
   onSaveSuccess: (savedConfig: MeshConfig) => void;
   onRevert?: () => void;
   onBackendErrors?: (errors: ConfigValidationError[]) => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
 };
 
 type ToastVariant = 'success' | 'warning' | 'error';
@@ -111,6 +115,10 @@ export function SaveConfig({
   onSaveSuccess,
   onRevert,
   onBackendErrors,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
 }: Props) {
   const [saveStatus, setSaveStatus] = useState<SaveStatus>({ type: 'idle' });
   const [diffDialogOpen, setDiffDialogOpen] = useState(false);
@@ -182,6 +190,31 @@ export function SaveConfig({
   return (
     <>
       <div className="flex items-center gap-2 flex-wrap">
+        {(onUndo ?? onRedo) ? (
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!canUndo}
+              onClick={onUndo}
+              data-testid="undo-button"
+              aria-label="Undo"
+            >
+              <Undo2 className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!canRedo}
+              onClick={onRedo}
+              data-testid="redo-button"
+              aria-label="Redo"
+            >
+              <Redo2 className="h-4 w-4" />
+            </Button>
+            <div className="w-px h-4 bg-border" />
+          </>
+        ) : null}
         {onRevert ? (
           <Button
             data-testid="revert-config-btn"

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-pub const AUTHORED_CONFIG_VERSION: u32 = 3;
+pub const AUTHORED_CONFIG_VERSION: u32 = 1;
 
 fn mesh_root_dir() -> PathBuf {
     dirs::home_dir()
@@ -157,10 +157,7 @@ impl AuthoredMeshConfig {
         let mut parsed: Self = toml::from_str(&raw)
             .with_context(|| format!("Failed to parse config {}", path.display()))?;
         match parsed.version {
-            2 | AUTHORED_CONFIG_VERSION => {
-                parsed.version = AUTHORED_CONFIG_VERSION;
-                Ok(parsed)
-            }
+            AUTHORED_CONFIG_VERSION => Ok(parsed),
             other => bail!("Unsupported authored config version {other}"),
         }
     }
@@ -369,9 +366,9 @@ mod tests {
     }
 
     #[test]
-    fn authored_config_supports_schema_v3_gpu_placement() {
+    fn authored_config_supports_schema_v1_gpu_placement() {
         let raw = r#"
-            version = 3
+            version = 1
 
             [[nodes]]
             node_id = "node-a"
@@ -400,20 +397,20 @@ mod tests {
         assert_eq!(parsed.nodes[0].models[1].gpu_index, Some(1));
 
         let serialized = toml::to_string_pretty(&parsed).unwrap();
-        assert!(serialized.contains("version = 3"));
+        assert!(serialized.contains("version = 1"));
         assert!(serialized.contains("placement_mode = \"separate\""));
         assert!(serialized.contains("gpu_index = 0"));
         assert!(serialized.contains("gpu_index = 1"));
     }
 
     #[test]
-    fn authored_config_v2_defaults_to_pooled_mode() {
+    fn authored_config_rejects_unsupported_version() {
         let mut dir = std::env::temp_dir();
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        dir.push(format!("mesh-llm-authored-config-v2-defaults-{nanos}"));
+        dir.push(format!("mesh-llm-authored-config-unsupported-ver-{nanos}"));
         std::fs::create_dir_all(&dir).unwrap();
 
         let v2_path = dir.join("mesh-v2.toml");
@@ -431,24 +428,27 @@ mod tests {
         )
         .unwrap();
 
-        let parsed = AuthoredMeshConfig::load(&v2_path).unwrap();
-        assert_eq!(parsed.version, AUTHORED_CONFIG_VERSION);
-        assert_eq!(parsed.nodes.len(), 1);
-        assert_eq!(parsed.nodes[0].placement_mode, PlacementMode::Pooled);
-        assert_eq!(parsed.nodes[0].models.len(), 1);
-        assert_eq!(parsed.nodes[0].models[0].gpu_index, None);
+        let result = AuthoredMeshConfig::load(&v2_path);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Unsupported authored config version 2"));
 
-        let v3_path = dir.join("mesh-v3.toml");
-        parsed.save(&v3_path).unwrap();
-        let saved = std::fs::read_to_string(&v3_path).unwrap();
-        assert!(saved.contains("version = 3"));
-        assert!(saved.contains("placement_mode = \"pooled\""));
+        let v1_path = dir.join("mesh-v1.toml");
+        let valid = AuthoredMeshConfig {
+            version: AUTHORED_CONFIG_VERSION,
+            nodes: vec![],
+        };
+        valid.save(&v1_path).unwrap();
+        let saved = std::fs::read_to_string(&v1_path).unwrap();
+        assert!(saved.contains("version = 1"));
     }
 
     #[test]
     fn authored_config_rejects_invalid_placement_fields() {
         let invalid_placement_mode = r#"
-            version = 3
+            version = 1
 
             [[nodes]]
             node_id = "node-a"
@@ -459,7 +459,7 @@ mod tests {
         assert!(placement_err.to_string().contains("placement_mode"));
 
         let invalid_gpu_index_negative = r#"
-            version = 3
+            version = 1
 
             [[nodes]]
             node_id = "node-a"
@@ -472,7 +472,7 @@ mod tests {
         assert!(toml::from_str::<AuthoredMeshConfig>(invalid_gpu_index_negative).is_err());
 
         let invalid_gpu_index_non_integer = r#"
-            version = 3
+            version = 1
 
             [[nodes]]
             node_id = "node-a"
@@ -485,7 +485,7 @@ mod tests {
         assert!(toml::from_str::<AuthoredMeshConfig>(invalid_gpu_index_non_integer).is_err());
 
         let invalid_gpu_index_non_numeric = r#"
-            version = 3
+            version = 1
 
             [[nodes]]
             node_id = "node-a"

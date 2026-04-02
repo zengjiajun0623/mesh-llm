@@ -44,6 +44,8 @@ type ConfigNodeListProps = {
   ) => void;
   onUpdateModel: (nodeId: string, assignmentId: string, updates: Partial<ModelAssignment>) => void;
   onModeSwitch: (nodeId: string, newMode: PlacementMode) => void;
+  onBeginBatch?: () => void;
+  onEndBatch?: () => void;
 };
 
 export function ConfigNodeList({
@@ -70,6 +72,8 @@ export function ConfigNodeList({
   onResizeSplitBoundary,
   onUpdateModel,
   onModeSwitch,
+  onBeginBatch,
+  onEndBatch,
 }: ConfigNodeListProps) {
   return (
     <div data-testid="config-node-sections" className="space-y-4">
@@ -144,6 +148,8 @@ export function ConfigNodeList({
               onUpdateModel={(assignmentId, updates) =>
                 onUpdateModel(node.id, assignmentId, updates)
               }
+              onBeginBatch={onBeginBatch}
+              onEndBatch={onEndBatch}
               onPlacementModeChange={(newMode) => {
                 if (newMode !== currentPlacementMode) {
                   onModeSwitch(node.id, newMode);

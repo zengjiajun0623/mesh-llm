@@ -22,11 +22,11 @@ describe('checkVramFit', () => {
     const noFit = checkVramFit(24_000_000_000, 22_000_000_000, 0);
 
     expect(fits.fits).toBe(true);
-    // usedPercent = (assignedBytes + required) / nodeVram = (0 + 20B*1.1 + 512MB) / 24B
+    // usedPercent = required / nodeVram = (20B*1.1 + 512MB) / 24B
     expect(fits.usedPercent).toBeCloseTo(((20_000_000_000 * 1.1 + GPU_SYSTEM_OVERHEAD_BYTES) / 24_000_000_000) * 100);
 
     expect(noFit.fits).toBe(false);
-    // usedPercent = (0 + 22B*1.1 + 512MB) / 24B
+    // usedPercent = (22B*1.1 + 512MB) / 24B
     expect(noFit.usedPercent).toBeCloseTo(((22_000_000_000 * 1.1 + GPU_SYSTEM_OVERHEAD_BYTES) / 24_000_000_000) * 100);
   });
 
@@ -34,8 +34,8 @@ describe('checkVramFit', () => {
     const result = checkVramFit(24_000_000_000, 12_000_000_000, 12_000_000_000);
 
     expect(result.fits).toBe(false);
-    // usedPercent = (assignedBytes + modelBytes*1.1 + GPU_SYSTEM_OVERHEAD_BYTES) / nodeVram
-    expect(result.usedPercent).toBeCloseTo(((12_000_000_000 + 12_000_000_000 * 1.1 + GPU_SYSTEM_OVERHEAD_BYTES) / 24_000_000_000) * 100);
+    // usedPercent = required / nodeVram (independent of existing assignedBytes)
+    expect(result.usedPercent).toBeCloseTo(((12_000_000_000 * 1.1 + GPU_SYSTEM_OVERHEAD_BYTES) / 24_000_000_000) * 100);
   });
 
   it('8GB model on 9GB GPU does not fit with 512MB system overhead', () => {

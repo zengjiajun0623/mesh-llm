@@ -3,7 +3,6 @@ import { useMemo } from 'react';
 import type { OwnedNode } from '../../hooks/useOwnedNodes';
 import { aggregateModels, type ModelCatalogPeer } from '../../lib/models';
 import type { MeshConfig } from '../../types/config';
-import { Button } from '../ui/button';
 import type { NodeAssignTarget } from './CatalogContextMenu';
 import { ModelCatalog } from './ModelCatalog';
 import { TomlEditor } from './TomlEditor';
@@ -28,10 +27,6 @@ type ConfigToolsPanelProps = {
   onRefreshStatus?: () => Promise<void> | void;
   assignTargets?: NodeAssignTarget[];
   onAssignToNode?: (modelName: string, sizeBytes: number, nodeId: string) => void;
-  canUndo?: boolean;
-  canRedo?: boolean;
-  onUndo?: () => void;
-  onRedo?: () => void;
 };
 
 export function ConfigToolsPanel({
@@ -48,10 +43,6 @@ export function ConfigToolsPanel({
   onRefreshStatus,
   assignTargets,
   onAssignToNode,
-  canUndo,
-  canRedo,
-  onUndo,
-  onRedo,
 }: ConfigToolsPanelProps) {
   const fullyPlacedModels = useMemo(() => {
     const aggregated = aggregateModels(peers);
@@ -74,30 +65,6 @@ export function ConfigToolsPanel({
 
   return (
     <div className="space-y-6" data-testid="config-layout">
-      {(onUndo ?? onRedo) ? (
-        <div className="flex items-center gap-2" data-testid="undo-redo-toolbar">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!canUndo}
-            onClick={onUndo}
-            data-testid="undo-button"
-            aria-label="Undo"
-          >
-            Undo
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!canRedo}
-            onClick={onRedo}
-            data-testid="redo-button"
-            aria-label="Redo"
-          >
-            Redo
-          </Button>
-        </div>
-      ) : null}
       <div
         data-testid="config-tools-layout"
         className="grid grid-cols-1 gap-6 lg:min-h-[40rem] lg:grid-cols-2 lg:items-stretch"
