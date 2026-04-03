@@ -362,70 +362,48 @@ Configure in your agent's MCP settings:
 
 Tools exposed: `blackboard_post`, `blackboard_search`, `blackboard_feed`.
 
-## Incentive Layer (MESH Token)
+## MESH Token
 
-Earn tokens for serving inference. Spend tokens to use other nodes' models. Bitcoin-style economics — 21M fixed supply, no pre-mine.
+Serve free AI inference. Earn MESH. Powered by [Elytro](https://elytro.com).
 
 ### How it works
 
-Nodes mine MESH by serving AI inference. Rewards are proportional to GPU-seconds spent on real requests. Bigger models take longer per token = more GPU-seconds = more reward. No model weight tables, no governance — the GPU clock decides.
+You run a mesh-llm node and serve free inference. When someone uses your node, their wallet auto-signs a receipt. You submit receipts on-chain to mint **1 MESH per receipt**. 21M total supply. No pre-mine. No VC tokens.
 
-```
-node_reward = (your_gpu_seconds / network_total_gpu_seconds) × daily_epoch_reward
-```
-
-Daily epoch reward starts at **7,192 MESH**, halving every ~4 years. Same curve as Bitcoin.
-
-### Start mining in 2 commands
+### Node operator (earn MESH)
 
 ```bash
 # Terminal 1: join the mesh and serve inference
 mesh-llm --auto
 
-# Terminal 2: start the mining daemon (auto-creates wallet, tracks GPU-seconds, claims MESH)
+# Terminal 2: start the miner (auto-creates Elytro wallet, collects receipts, claims MESH)
 node mesh-mine.js
+
+# Check balance
+node mesh-mine.js --status
 ```
 
-The daemon automatically:
-- Creates an [Elytro](https://elytro.com) wallet on first run (gas sponsored, zero ETH needed)
-- Monitors your mesh-llm node for inference requests
-- Tracks GPU-seconds per epoch
-- Submits work proofs when epochs close
-- Claims MESH tokens to your wallet
+### Consumer (use inference, reward nodes)
 
 ```bash
-# Check your balance and mining stats
-node mesh-mine.js --status
+# Chat with the mesh — auto-signs receipt to reward the node
+node mesh-client.js "Explain quantum computing in simple terms"
 
-# Force claim all pending epochs
-node mesh-mine.js --claim
-
-# Open the mining dashboard
-open http://localhost:8899/mesh-dashboard.html
+# Use a specific model
+node mesh-client.js --model DeepSeek-R1-Distill-Qwen-32B-Q4_K_M "Write a haiku"
 ```
 
-### Token economics
+The client auto-generates a signing key on first run. Every request you make signs a receipt that rewards the node operator 1 MESH.
 
-| Parameter | Value |
+### Token
+
+| | |
 |---|---|
-| Max supply | 21,000,000 MESH |
-| Daily reward | 7,192 MESH (halves every ~4 years) |
-| Mining | GPU-seconds serving inference |
-| Paid request weight | 1.0x |
-| Free-tier request weight | 0.2x |
-| Wallet | Elytro (ERC-4337, auto-generated) |
-| Chain | Ethereum (Sepolia testnet now, mainnet later) |
-
-### Contracts (Ethereum Sepolia)
-
-| Contract | Address |
-|---|---|
-| MeshToken | [`0x1577264ec9Af930835bd91eAd5eE7f437189C5B2`](https://sepolia.etherscan.io/address/0x1577264ec9Af930835bd91eAd5eE7f437189C5B2) |
-| MeshTokenTestnet (5-min epochs) | [`0x5f74F34113AE4C47A4e3e8Bdde7BC02121B4480c`](https://sepolia.etherscan.io/address/0x5f74F34113AE4C47A4e3e8Bdde7BC02121B4480c) |
-| PaymentChannel | [`0xd687d099FB08B133792C7D7294F56C66CE108376`](https://sepolia.etherscan.io/address/0xd687d099FB08B133792C7D7294F56C66CE108376) |
-| MeshPaymaster | [`0x845737B8bC345727225E4EF0E3a417CF3bDcB4f3`](https://sepolia.etherscan.io/address/0x845737B8bC345727225E4EF0E3a417CF3bDcB4f3) |
-
-All contracts deployed via [Elytro](https://elytro.com) smart account with gas fully sponsored. See [INCENTIVE_LAYER.md](INCENTIVE_LAYER.md) for the full architecture, threat model, and roadmap.
+| Supply | 21,000,000 MESH |
+| Reward | 1 MESH per consumer-signed receipt |
+| Anti-gaming | No self-dealing, 1 receipt/consumer/hour, 7-day expiry, signature verification |
+| Wallet | [Elytro](https://elytro.com) (ERC-4337, auto-generated, gas sponsored) |
+| Contract | [`0x0A773654184E5405ef9AB153159185e247118668`](https://sepolia.etherscan.io/address/0x0A773654184E5405ef9AB153159185e247118668) (Sepolia) |
 
 ## Benchmarks
 
