@@ -368,7 +368,14 @@ Serve free AI inference. Earn MESH. Powered by [Elytro](https://elytro.com).
 
 ### How it works
 
-You run a mesh-llm node and serve free inference. When someone uses your node, their wallet auto-signs a receipt. You submit receipts on-chain to mint **1 MESH per receipt**. 21M total supply. No pre-mine. No VC tokens.
+You run a mesh-llm node and serve free inference to the world. When someone uses your node, their wallet auto-signs a receipt. You submit receipts on-chain to mint **1 MESH per receipt**. 21M total supply. No pre-mine. No VC tokens. All gas sponsored by Elytro.
+
+### Prerequisites
+
+```bash
+npm install -g @elytro/cli    # Elytro wallet
+curl -L https://foundry.paradigm.xyz | bash && foundryup   # Foundry (cast)
+```
 
 ### Node operator (earn MESH)
 
@@ -376,24 +383,29 @@ You run a mesh-llm node and serve free inference. When someone uses your node, t
 # Terminal 1: join the mesh and serve inference
 mesh-llm --auto
 
-# Terminal 2: start the miner (auto-creates Elytro wallet, collects receipts, claims MESH)
-node mesh-mine.js
+# Terminal 2: start the miner
+cd mesh-llm
+node mesh-mine.js           # auto-creates Elytro wallet, collects receipts, claims MESH
 
-# Check balance
+# Check your balance anytime
 node mesh-mine.js --status
 ```
+
+The miner auto-creates an [Elytro](https://elytro.com) wallet on first run (gas sponsored, zero ETH needed). Receipts are auto-submitted on-chain every 5 minutes.
 
 ### Consumer (use inference, reward nodes)
 
 ```bash
-# Chat with the mesh — auto-signs receipt to reward the node
+cd mesh-llm
+
+# Chat with the mesh — auto-signs receipt to reward the node operator
 node mesh-client.js "Explain quantum computing in simple terms"
 
-# Use a specific model
+# Specify a model
 node mesh-client.js --model DeepSeek-R1-Distill-Qwen-32B-Q4_K_M "Write a haiku"
 ```
 
-The client auto-generates a signing key on first run. Every request you make signs a receipt that rewards the node operator 1 MESH.
+The client auto-generates a signing key on first run. Every request signs a receipt that rewards the node operator 1 MESH. No setup needed.
 
 ### Token
 
@@ -401,9 +413,10 @@ The client auto-generates a signing key on first run. Every request you make sig
 |---|---|
 | Supply | 21,000,000 MESH |
 | Reward | 1 MESH per consumer-signed receipt |
-| Anti-gaming | No self-dealing, 1 receipt/consumer/hour, 7-day expiry, signature verification |
+| Anti-gaming | No self-dealing, 1 receipt/consumer/hour, 7-day expiry, on-chain signature verification |
 | Wallet | [Elytro](https://elytro.com) (ERC-4337, auto-generated, gas sponsored) |
 | Contract | [`0x0A773654184E5405ef9AB153159185e247118668`](https://sepolia.etherscan.io/address/0x0A773654184E5405ef9AB153159185e247118668) (Sepolia) |
+| Landing page | [index.html](index.html) |
 
 ## Benchmarks
 
