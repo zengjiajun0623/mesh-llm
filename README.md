@@ -362,6 +362,59 @@ Configure in your agent's MCP settings:
 
 Tools exposed: `blackboard_post`, `blackboard_search`, `blackboard_feed`.
 
+## Incentive Layer (MESH Token)
+
+Earn tokens for serving inference. Spend tokens to use other nodes' models. Bitcoin-style economics — 21M fixed supply, no pre-mine.
+
+### How it works
+
+Nodes mine MESH by serving AI inference. Rewards are proportional to GPU-seconds spent on real requests. Bigger models take longer per token = more GPU-seconds = more reward. No model weight tables, no governance — the GPU clock decides.
+
+```
+node_reward = (your_gpu_seconds / network_total_gpu_seconds) × daily_epoch_reward
+```
+
+Daily epoch reward starts at **7,192 MESH**, halving every ~4 years. Same curve as Bitcoin.
+
+### Quick start
+
+```bash
+# 1. Join the mesh and start serving (auto-generates an Elytro wallet)
+mesh-llm --auto
+
+# 2. Check your mining status and balance
+./cli/mesh-balance.sh
+
+# 3. Submit work for a completed epoch
+./cli/mesh-mine.sh 0 0 5000      # 5000 free-tier GPU-seconds for epoch 0
+
+# 4. Claim mined MESH to your wallet
+./cli/mesh-claim.sh 0
+```
+
+### Token economics
+
+| Parameter | Value |
+|---|---|
+| Max supply | 21,000,000 MESH |
+| Daily reward | 7,192 MESH (halves every ~4 years) |
+| Mining | GPU-seconds serving inference |
+| Paid request weight | 1.0x |
+| Free-tier request weight | 0.2x |
+| Wallet | Elytro (ERC-4337, auto-generated) |
+| Chain | Ethereum (Sepolia testnet now, mainnet later) |
+
+### Contracts (Ethereum Sepolia)
+
+| Contract | Address |
+|---|---|
+| MeshToken | [`0x1577264ec9Af930835bd91eAd5eE7f437189C5B2`](https://sepolia.etherscan.io/address/0x1577264ec9Af930835bd91eAd5eE7f437189C5B2) |
+| MeshTokenTestnet (5-min epochs) | [`0x5f74F34113AE4C47A4e3e8Bdde7BC02121B4480c`](https://sepolia.etherscan.io/address/0x5f74F34113AE4C47A4e3e8Bdde7BC02121B4480c) |
+| PaymentChannel | [`0xd687d099FB08B133792C7D7294F56C66CE108376`](https://sepolia.etherscan.io/address/0xd687d099FB08B133792C7D7294F56C66CE108376) |
+| MeshPaymaster | [`0x845737B8bC345727225E4EF0E3a417CF3bDcB4f3`](https://sepolia.etherscan.io/address/0x845737B8bC345727225E4EF0E3a417CF3bDcB4f3) |
+
+All contracts deployed via [Elytro](https://elytro.com) smart account with gas fully sponsored. See [INCENTIVE_LAYER.md](INCENTIVE_LAYER.md) for the full architecture, threat model, and roadmap.
+
 ## Benchmarks
 
 GLM-4.7-Flash-Q4_K_M (17GB), M4 Max + Mac Mini M4, WiFi:
