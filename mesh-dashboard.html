@@ -72,7 +72,7 @@
 <body>
 
 <div class="header">
-  <h1>MESH <span>Mining</span></h1>
+  <h1>MESH <span>Miner</span></h1>
   <div class="status">
     <div class="dot" id="status-dot"></div>
     <span id="status-text">Connecting...</span>
@@ -88,14 +88,14 @@
       <div class="sub">MESH tokens</div>
     </div>
     <div class="hero-item">
-      <div class="label">Epoch</div>
-      <div class="value" id="epoch">-</div>
-      <div class="sub" id="epoch-reward">-</div>
+      <div class="label">Pending Receipts</div>
+      <div class="value" id="pending">0</div>
+      <div class="sub">waiting to claim</div>
     </div>
     <div class="hero-item">
-      <div class="label">GPU-seconds (this epoch)</div>
-      <div class="value" id="gpu-secs">0</div>
-      <div class="sub" id="gpu-status">accumulating</div>
+      <div class="label">Total Claimed</div>
+      <div class="value" id="claimed">0</div>
+      <div class="sub">receipts submitted</div>
     </div>
   </div>
   <div class="supply-bar">
@@ -201,29 +201,19 @@ async function fetchMining() {
 }
 
 function updateMining(d) {
-  const bal = d.balance / 1e8;
-  document.getElementById('balance').textContent = bal.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const bal = d.balance / 1e18;
+  document.getElementById('balance').textContent = bal.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
 
-  document.getElementById('epoch').textContent = d.currentEpoch;
-  document.getElementById('epoch-reward').textContent = `${(d.epochReward / 1e8).toFixed(0)} MESH/epoch`;
+  document.getElementById('pending').textContent = d.pendingReceipts || 0;
+  document.getElementById('claimed').textContent = d.totalClaimed || 0;
 
-  // Current epoch GPU-seconds
-  const ep = d.epochs?.[d.currentEpoch];
-  if (ep) {
-    const total = ep.paidGpuSeconds + ep.freeGpuSeconds;
-    document.getElementById('gpu-secs').textContent = total.toLocaleString();
-    document.getElementById('gpu-status').textContent = ep.submitted ? 'submitted' : 'accumulating';
-  }
-
-  // Supply bar
   const pct = (d.totalMinted / d.maxSupply) * 100;
   document.getElementById('supply-fill').style.width = `${Math.max(0.1, pct)}%`;
-  document.getElementById('minted-label').textContent = `${(d.totalMinted / 1e8).toLocaleString()} minted (${pct.toFixed(4)}%)`;
+  document.getElementById('minted-label').textContent = `${(d.totalMinted / 1e18).toLocaleString()} minted (${pct.toFixed(6)}%)`;
 
-  // Wallet
   if (d.wallet) {
     document.getElementById('wallet-info').innerHTML =
-      `Wallet: <a href="https://sepolia.etherscan.io/address/${d.wallet}" target="_blank">${d.wallet.slice(0,6)}...${d.wallet.slice(-4)}</a> (${d.alias}) | Contract: <a href="https://sepolia.etherscan.io/address/${d.contract}" target="_blank">${d.contract.slice(0,6)}...${d.contract.slice(-4)}</a>`;
+      `Wallet: <a href="https://sepolia.etherscan.io/address/${d.wallet}" target="_blank">${d.wallet.slice(0,6)}...${d.wallet.slice(-4)}</a> (${d.alias}) | Token: <a href="https://sepolia.etherscan.io/address/${d.contract}" target="_blank">${d.contract.slice(0,6)}...${d.contract.slice(-4)}</a> | 1 MESH per receipt`;
   }
 }
 
