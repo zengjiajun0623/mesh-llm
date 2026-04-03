@@ -4165,9 +4165,11 @@ function MeshTopologyFlow({
   );
 }
 
+type TopologyRowBucket = "serving" | "worker";
+
 type TopologyRow = {
   nodes: TopologyNode[];
-  bucket: PositionedTopologyNode["bucket"];
+  bucket: TopologyRowBucket;
 };
 
 function layoutTopologyNodes(
@@ -4177,7 +4179,7 @@ function layoutTopologyNodes(
 ): PositionedTopologyNode[] {
   const chunkRows = (
     rowNodes: TopologyNode[],
-    bucket: TopologyRow["bucket"],
+    bucket: TopologyRowBucket,
     maxPerRow: number,
   ): TopologyRow[] => {
     if (!rowNodes.length) return [];
