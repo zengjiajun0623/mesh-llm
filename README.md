@@ -376,20 +376,32 @@ node_reward = (your_gpu_seconds / network_total_gpu_seconds) × daily_epoch_rewa
 
 Daily epoch reward starts at **7,192 MESH**, halving every ~4 years. Same curve as Bitcoin.
 
-### Quick start
+### Start mining in 2 commands
 
 ```bash
-# 1. Join the mesh and start serving (auto-generates an Elytro wallet)
+# Terminal 1: join the mesh and serve inference
 mesh-llm --auto
 
-# 2. Check your mining status and balance
-./cli/mesh-balance.sh
+# Terminal 2: start the mining daemon (auto-creates wallet, tracks GPU-seconds, claims MESH)
+node mesh-mine.js
+```
 
-# 3. Submit work for a completed epoch
-./cli/mesh-mine.sh 0 0 5000      # 5000 free-tier GPU-seconds for epoch 0
+The daemon automatically:
+- Creates an [Elytro](https://elytro.com) wallet on first run (gas sponsored, zero ETH needed)
+- Monitors your mesh-llm node for inference requests
+- Tracks GPU-seconds per epoch
+- Submits work proofs when epochs close
+- Claims MESH tokens to your wallet
 
-# 4. Claim mined MESH to your wallet
-./cli/mesh-claim.sh 0
+```bash
+# Check your balance and mining stats
+node mesh-mine.js --status
+
+# Force claim all pending epochs
+node mesh-mine.js --claim
+
+# Open the mining dashboard
+open http://localhost:8899/mesh-dashboard.html
 ```
 
 ### Token economics

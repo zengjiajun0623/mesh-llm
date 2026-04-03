@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MESH Mining Dashboard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a0f; color: #e2e8f0; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro', system-ui, sans-serif; padding: 24px; min-height: 100vh; }
+
+  .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 28px; }
+  .header h1 { font-size: 20px; font-weight: 600; color: #f8fafc; letter-spacing: -0.5px; }
+  .header h1 span { color: #f59e0b; }
+  .header .status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #94a3b8; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .dot.green { background: #22c55e; box-shadow: 0 0 6px #22c55e88; }
+  .dot.red { background: #ef4444; box-shadow: 0 0 6px #ef444488; }
+
+  /* Mining hero */
+  .mining-hero { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%); border-radius: 16px; padding: 28px; margin-bottom: 20px; border: 1px solid #1e3a5f; position: relative; overflow: hidden; }
+  .mining-hero::before { content: ''; position: absolute; top: -50%; right: -20%; width: 300px; height: 300px; background: radial-gradient(circle, #f59e0b11 0%, transparent 70%); pointer-events: none; }
+  .mining-hero .hero-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; }
+  .mining-hero .hero-item .label { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+  .mining-hero .hero-item .value { font-size: 32px; font-weight: 800; color: #f8fafc; letter-spacing: -1px; }
+  .mining-hero .hero-item .value.gold { color: #f59e0b; }
+  .mining-hero .hero-item .sub { font-size: 12px; color: #475569; margin-top: 2px; }
+  .mining-hero .wallet { font-size: 12px; color: #475569; margin-top: 16px; font-family: monospace; }
+  .mining-hero .wallet a { color: #64748b; text-decoration: none; }
+  .mining-hero .wallet a:hover { color: #94a3b8; }
+
+  /* Progress bar */
+  .supply-bar { margin-top: 16px; }
+  .supply-bar .bar-bg { height: 6px; background: #1e293b; border-radius: 3px; overflow: hidden; }
+  .supply-bar .bar-fill { height: 100%; background: linear-gradient(90deg, #f59e0b, #ef4444); border-radius: 3px; transition: width 1s; }
+  .supply-bar .bar-labels { display: flex; justify-content: space-between; font-size: 11px; color: #475569; margin-top: 4px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .card { background: #111118; border-radius: 10px; padding: 16px; border: 1px solid #1e1e2e; }
+  .card .label { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .card .value { font-size: 22px; font-weight: 700; color: #f8fafc; }
+  .card .sub { font-size: 11px; color: #475569; margin-top: 2px; }
+
+  .section { margin-bottom: 20px; }
+  .section h2 { font-size: 14px; font-weight: 600; margin-bottom: 10px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  table { width: 100%; border-collapse: collapse; background: #111118; border-radius: 10px; overflow: hidden; border: 1px solid #1e1e2e; }
+  th { text-align: left; padding: 10px 14px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: #475569; background: #0a0a0f; }
+  td { padding: 10px 14px; font-size: 13px; border-bottom: 1px solid #1e1e2e; }
+  tr:last-child td { border-bottom: none; }
+  tr.mine td { color: #f59e0b; }
+  tr.mine td:first-child::before { content: ''; display: inline-block; width: 5px; height: 5px; border-radius: 50%; background: #f59e0b; margin-right: 6px; }
+
+  .badge { display: inline-block; padding: 2px 7px; border-radius: 9999px; font-size: 10px; font-weight: 600; }
+  .badge.warm { background: #22c55e18; color: #4ade80; }
+  .badge.cold { background: #64748b18; color: #64748b; }
+
+  .peers-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+  .peer-card { background: #111118; border-radius: 8px; padding: 12px 14px; border: 1px solid #1e1e2e; }
+  .peer-card .peer-id { font-family: monospace; font-size: 12px; color: #94a3b8; }
+  .peer-card .peer-model { font-size: 11px; color: #64748b; margin-top: 2px; }
+
+  .epoch-log { background: #111118; border-radius: 10px; border: 1px solid #1e1e2e; padding: 14px; max-height: 160px; overflow-y: auto; font-family: monospace; font-size: 12px; }
+  .epoch-log .entry { padding: 3px 0; color: #64748b; }
+  .epoch-log .entry.new { color: #f59e0b; }
+
+  @media (max-width: 768px) {
+    .mining-hero .hero-grid { grid-template-columns: 1fr; gap: 16px; }
+    .grid { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>MESH <span>Mining</span></h1>
+  <div class="status">
+    <div class="dot" id="status-dot"></div>
+    <span id="status-text">Connecting...</span>
+  </div>
+</div>
+
+<!-- Mining hero section -->
+<div class="mining-hero">
+  <div class="hero-grid">
+    <div class="hero-item">
+      <div class="label">Balance</div>
+      <div class="value gold" id="balance">0.00</div>
+      <div class="sub">MESH tokens</div>
+    </div>
+    <div class="hero-item">
+      <div class="label">Epoch</div>
+      <div class="value" id="epoch">-</div>
+      <div class="sub" id="epoch-reward">-</div>
+    </div>
+    <div class="hero-item">
+      <div class="label">GPU-seconds (this epoch)</div>
+      <div class="value" id="gpu-secs">0</div>
+      <div class="sub" id="gpu-status">accumulating</div>
+    </div>
+  </div>
+  <div class="supply-bar">
+    <div class="bar-bg"><div class="bar-fill" id="supply-fill" style="width:0%"></div></div>
+    <div class="bar-labels">
+      <span id="minted-label">0 minted</span>
+      <span>21,000,000 MESH</span>
+    </div>
+  </div>
+  <div class="wallet" id="wallet-info"></div>
+</div>
+
+<!-- Node stats -->
+<div class="grid">
+  <div class="card">
+    <div class="label">Model</div>
+    <div class="value" id="my-model" style="font-size:14px;">-</div>
+    <div class="sub" id="my-role">-</div>
+  </div>
+  <div class="card">
+    <div class="label">Peers</div>
+    <div class="value" id="peer-count">-</div>
+    <div class="sub" id="peer-sub">-</div>
+  </div>
+  <div class="card">
+    <div class="label">Requests Served</div>
+    <div class="value" id="req-count">-</div>
+    <div class="sub" id="req-last">-</div>
+  </div>
+  <div class="card">
+    <div class="label">Inflight</div>
+    <div class="value" id="inflight">0</div>
+    <div class="sub">active requests</div>
+  </div>
+</div>
+
+<!-- Mining log -->
+<div class="section">
+  <h2>Mining Log</h2>
+  <div class="epoch-log" id="mine-log">
+    <div class="entry">Waiting for data...</div>
+  </div>
+</div>
+
+<!-- Mesh models -->
+<div class="section">
+  <h2>Mesh Models</h2>
+  <table>
+    <thead><tr><th>Model</th><th>Status</th><th>Nodes</th><th>Requests</th><th>Last Active</th></tr></thead>
+    <tbody id="models-tbody"></tbody>
+  </table>
+</div>
+
+<!-- Peers -->
+<div class="section">
+  <h2>Peers</h2>
+  <div class="peers-grid" id="peers-grid"></div>
+</div>
+
+<script>
+const MESH_API = '/api/status';
+const MINE_API = '/api/mining';
+let lastReqCount = null;
+let logEntries = [];
+
+function formatTime(secs) {
+  if (secs == null) return '-';
+  if (secs < 60) return `${secs}s ago`;
+  if (secs < 3600) return `${Math.floor(secs/60)}m ago`;
+  if (secs < 86400) return `${Math.floor(secs/3600)}h ago`;
+  return `${Math.floor(secs/86400)}d ago`;
+}
+
+function addLog(msg, isNew) {
+  const time = new Date().toLocaleTimeString();
+  logEntries.unshift({ time, msg, isNew });
+  if (logEntries.length > 50) logEntries.pop();
+  const el = document.getElementById('mine-log');
+  el.innerHTML = logEntries.map(e =>
+    `<div class="entry ${e.isNew ? 'new' : ''}">${e.time} ${e.msg}</div>`
+  ).join('');
+}
+
+async function fetchMesh() {
+  try {
+    const res = await fetch(MESH_API);
+    const d = await res.json();
+    updateMesh(d);
+  } catch {
+    document.getElementById('status-dot').className = 'dot red';
+    document.getElementById('status-text').textContent = 'mesh-llm offline';
+  }
+}
+
+async function fetchMining() {
+  try {
+    const res = await fetch(MINE_API);
+    const d = await res.json();
+    updateMining(d);
+  } catch {
+    // Mining API not available
+  }
+}
+
+function updateMining(d) {
+  const bal = d.balance / 1e8;
+  document.getElementById('balance').textContent = bal.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+  document.getElementById('epoch').textContent = d.currentEpoch;
+  document.getElementById('epoch-reward').textContent = `${(d.epochReward / 1e8).toFixed(0)} MESH/epoch`;
+
+  // Current epoch GPU-seconds
+  const ep = d.epochs?.[d.currentEpoch];
+  if (ep) {
+    const total = ep.paidGpuSeconds + ep.freeGpuSeconds;
+    document.getElementById('gpu-secs').textContent = total.toLocaleString();
+    document.getElementById('gpu-status').textContent = ep.submitted ? 'submitted' : 'accumulating';
+  }
+
+  // Supply bar
+  const pct = (d.totalMinted / d.maxSupply) * 100;
+  document.getElementById('supply-fill').style.width = `${Math.max(0.1, pct)}%`;
+  document.getElementById('minted-label').textContent = `${(d.totalMinted / 1e8).toLocaleString()} minted (${pct.toFixed(4)}%)`;
+
+  // Wallet
+  if (d.wallet) {
+    document.getElementById('wallet-info').innerHTML =
+      `Wallet: <a href="https://sepolia.etherscan.io/address/${d.wallet}" target="_blank">${d.wallet.slice(0,6)}...${d.wallet.slice(-4)}</a> (${d.alias}) | Contract: <a href="https://sepolia.etherscan.io/address/${d.contract}" target="_blank">${d.contract.slice(0,6)}...${d.contract.slice(-4)}</a>`;
+  }
+}
+
+function updateMesh(d) {
+  const isServing = d.node_status === 'Serving' && d.llama_ready;
+  document.getElementById('status-dot').className = `dot ${isServing ? 'green' : 'red'}`;
+  document.getElementById('status-text').textContent = `${d.node_status} (${d.node_id})`;
+
+  document.getElementById('my-model').textContent = d.model_name || 'None';
+  document.getElementById('my-role').textContent = `${d.is_host ? 'Host' : 'Worker'} | ${d.gpus?.[0]?.name || 'Unknown GPU'}`;
+
+  // Requests
+  const myModel = d.mesh_models?.find(m => m.name === d.model_name);
+  const reqCount = myModel?.request_count || 0;
+  document.getElementById('req-count').textContent = reqCount.toLocaleString();
+  document.getElementById('req-last').textContent = myModel?.last_active_secs_ago != null ? formatTime(myModel.last_active_secs_ago) : '-';
+
+  if (lastReqCount !== null && reqCount > lastReqCount) {
+    const diff = reqCount - lastReqCount;
+    addLog(`+${diff} request${diff>1?'s':''} served (total: ${reqCount})`, true);
+  }
+  lastReqCount = reqCount;
+
+  document.getElementById('inflight').textContent = d.inflight_requests;
+
+  // Peers
+  document.getElementById('peer-count').textContent = d.peers?.length || 0;
+  const hosts = d.peers?.filter(p => p.role === 'Host').length || 0;
+  const workers = d.peers?.filter(p => p.role === 'Worker').length || 0;
+  const clients = d.peers?.filter(p => p.role === 'Client').length || 0;
+  document.getElementById('peer-sub').textContent = `${hosts}h ${workers}w ${clients}c`;
+
+  // Models table
+  const sorted = [...(d.mesh_models || [])].sort((a,b) => (b.request_count||0) - (a.request_count||0));
+  document.getElementById('models-tbody').innerHTML = sorted.filter(m => m.status === 'warm').map(m => {
+    const isMine = m.name === d.model_name;
+    return `<tr class="${isMine ? 'mine' : ''}">
+      <td>${m.display_name || m.name}</td>
+      <td><span class="badge ${m.status}">${m.status}</span></td>
+      <td>${m.node_count}</td>
+      <td>${m.request_count != null ? m.request_count.toLocaleString() : '-'}</td>
+      <td>${formatTime(m.last_active_secs_ago)}</td>
+    </tr>`;
+  }).join('');
+
+  // Peers grid
+  document.getElementById('peers-grid').innerHTML = (d.peers || []).map(p =>
+    `<div class="peer-card">
+      <div class="peer-id">${p.id} <span class="badge ${p.role === 'Host' ? 'warm' : 'cold'}">${p.role}</span></div>
+      <div class="peer-model">${p.serving || 'No model'} | ${p.rtt_ms != null ? p.rtt_ms + 'ms' : '-'}</div>
+    </div>`
+  ).join('');
+}
+
+// Poll
+fetchMesh(); fetchMining();
+setInterval(fetchMesh, 10_000);
+setInterval(fetchMining, 15_000);
+</script>
+</body>
+</html>
