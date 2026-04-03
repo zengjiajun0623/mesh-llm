@@ -162,6 +162,15 @@ function log(msg) {
   console.error(`[mesh] ${msg}`);
 }
 
+function fetchJson(url) {
+  return new Promise((resolve, reject) => {
+    http.get(url, { timeout: 10000 }, res => {
+      let d = ""; res.on("data", c => d += c);
+      res.on("end", () => { try { resolve(JSON.parse(d)); } catch(e) { reject(e); } });
+    }).on("error", reject);
+  });
+}
+
 // ── Main ──────────────────────────────────────────────────────────────
 async function main() {
   const args = process.argv.slice(2);
@@ -208,13 +217,29 @@ async function main() {
   }
 
   // Read from stdin if no prompt
-  if (!prompt) {
+  if (!prompt && !process.stdin.isTTY) {
     prompt = fs.readFileSync(0, "utf-8").trim();
   }
 
   if (!prompt) {
     log("No prompt provided. Usage: node mesh-client.js \"your question\"");
     process.exit(1);
+  }
+
+  // Auto-detect model if not specified
+  if (!model) {
+    try {
+      // Try mesh-llm status API first (local model)
+      const status = await fetchJson("http://localhost:3131/api/status");
+      if (status?.model_name) {
+        model = status.model_name;
+      } else {
+        // Fallback to models list
+        const models = await fetchJson(MESH_API + "/v1/models");
+        if (models?.data?.length > 0) model = models.data[0].id;
+      }
+      if (model) log(`Using model: ${model}`);
+    } catch {}
   }
 
   // Chat
